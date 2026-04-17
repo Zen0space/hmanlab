@@ -70,9 +70,9 @@ async fn fetch_release(version: Option<&str>) -> Result<GitHubRelease> {
             } else {
                 format!("v{v}")
             };
-            format!("https://api.github.com/repos/qhkm/hmanlab/releases/tags/{tag}")
+            format!("https://api.github.com/repos/Zen0space/hmanlab/releases/tags/{tag}")
         }
-        None => "https://api.github.com/repos/qhkm/hmanlab/releases/latest".to_string(),
+        None => "https://api.github.com/repos/Zen0space/hmanlab/releases/latest".to_string(),
     };
 
     let client = reqwest::Client::new();
