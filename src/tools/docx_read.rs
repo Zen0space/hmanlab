@@ -128,9 +128,7 @@ impl DocxReadTool {
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Start(ref e))
-                    if e.local_name().as_ref() == b"t" =>
-                {
+                Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"t" => {
                     in_t = true;
                 }
                 Ok(Event::Empty(ref e)) => match e.local_name().as_ref() {
