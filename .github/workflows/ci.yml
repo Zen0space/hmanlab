@@ -21,6 +21,29 @@ permissions:
   checks: write
 
 jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      cargo_config: ${{ steps.filter.outputs.cargo_config }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: filter
+        with:
+          filters: |
+            rust:
+              - "src/**"
+              - "tests/**"
+              - "benches/**"
+              - "Cargo.toml"
+              - "Cargo.lock"
+            cargo_config:
+              - "Cargo.toml"
+              - "Cargo.lock"
+              - "deny.toml"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
@@ -35,13 +58,8 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev'
-    paths: &rust_paths
-      - "src/**"
-      - "tests/**"
-      - "benches/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && (github.ref == 'refs/heads/dev' || github.base_ref == 'dev')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
@@ -55,8 +73,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev'
-    paths: *rust_paths
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && (github.ref == 'refs/heads/dev' || github.base_ref == 'dev')
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
@@ -77,8 +95,8 @@ jobs:
   feature-matrix:
     name: Feature gates
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/dev' || github.base_ref == 'dev'
-    paths: *rust_paths
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && (github.ref == 'refs/heads/dev' || github.base_ref == 'dev')
     strategy:
       fail-fast: false
       matrix:
@@ -99,10 +117,8 @@ jobs:
   deny:
     name: Cargo deny
     runs-on: ubuntu-latest
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
+    needs: changes
+    if: needs.changes.outputs.cargo_config == 'true'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2.0.15
@@ -110,8 +126,8 @@ jobs:
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    paths: *rust_paths
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
@@ -120,7 +136,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: coverage
-      - uses: taiki-e/install-action@f23382d582832e41d5eb4fff2bdda06bc5adf8d3 # v2.68.21
+      - uses: taiki-e/install-action@f23382d582832e41d5eb4fff2bddb06bc5adf8d3 # v2.68.21
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Generate code coverage
@@ -134,9 +150,9 @@ jobs:
 
   riscv64-smoke:
     name: RISC-V smoke test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    paths: *rust_paths
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
       RUSTFLAGS: -Dwarnings --cfg getrandom_backend="linux_raw"
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER: riscv64-linux-gnu-gcc
@@ -162,9 +178,9 @@ jobs:
 
   binary-size:
     name: Binary size
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    paths: *rust_paths
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
     env:
       CARGO_INCREMENTAL: 0
     steps:
