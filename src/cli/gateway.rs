@@ -235,24 +235,23 @@ pub(crate) async fn cmd_gateway(
             }
         }))
     } else {
-        // Validate provider for in-process mode
         let runtime_provider_name = resolve_runtime_provider(&config).map(|provider| provider.name);
         if runtime_provider_name.is_none() {
             let configured = configured_provider_names(&config);
             if configured.is_empty() {
-                error!("No AI provider configured. Set HMANLAB_PROVIDERS_ANTHROPIC_API_KEY");
-                error!("or add your API key to {:?}", Config::path());
+                warn!("No AI provider configured. Agent requests will fail until a provider is added.");
+                warn!("Run 'hmanlab onboard' or set HMANLAB_PROVIDERS_ANTHROPIC_API_KEY");
+                warn!("or add your API key to {:?}", Config::path());
             } else {
-                error!(
+                warn!(
                     "Configured provider(s) are not supported by this runtime: {}",
                     configured.join(", ")
                 );
-                error!(
+                warn!(
                     "Currently supported runtime providers: {}",
                     RUNTIME_SUPPORTED_PROVIDERS.join(", ")
                 );
             }
-            std::process::exit(1);
         }
         None
     };
