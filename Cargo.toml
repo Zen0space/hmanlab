@@ -1,0 +1,344 @@
+[package]
+name = "hmanlab"
+version = "0.9.2"
+edition = "2021"
+authors = ["HmanLab Contributors"]
+description = "Ultra-lightweight personal AI assistant"
+license = "Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/qhkm/hmanlab"
+homepage = "https://github.com/qhkm/hmanlab"
+keywords = ["ai", "agent", "llm", "cli", "rust"]
+categories = ["command-line-utilities"]
+autobins = false
+
+[lints.rust.unexpected_cfgs]
+# mqtt feature is temporarily disabled (RUSTSEC-2026-0049) but code stays
+# behind #[cfg(feature = "mqtt")] — suppress the unknown-cfg warning.
+level = "warn"
+check-cfg = ['cfg(feature, values("mqtt"))']
+
+[dependencies]
+# =============================================================================
+# ASYNC RUNTIME
+# =============================================================================
+# Tokio async runtime - using "full" features because teloxide/reqwest
+# transitively pull in most features anyway (fs, net, etc.)
+# Minimal features don't reduce binary size due to transitive deps.
+tokio = { version = "1.35", features = ["full"] }
+
+# =============================================================================
+# SERIALIZATION
+# =============================================================================
+# JSON handling for LLM API requests/responses and config files
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+toml = "1.0"
+# JSON5 parsing for OpenClaw config migration (comments, trailing commas, unquoted keys)
+json5 = "1.3"
+
+# =============================================================================
+# HTTP CLIENT
+# =============================================================================
+# Reqwest with rustls (no OpenSSL dependency) for LLM provider APIs
+# - json: Automatic JSON serialization in requests
+# - rustls-tls: Pure Rust TLS implementation (smaller than native-tls)
+# - default-features = false: Excludes unnecessary features
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "multipart"], default-features = false }
+
+# =============================================================================
+# HTML PARSING
+# =============================================================================
+# DOM parser built on Servo's html5ever — CSS selectors for web_fetch extraction
+scraper = "0.26"
+
+# =============================================================================
+# CLI
+# =============================================================================
+# Command-line argument parsing with derive macros
+clap = { version = "4.5", features = ["derive"] }
+# Readline with tab-completion for interactive CLI
+rustyline = "17.0"
+
+# =============================================================================
+# LOGGING & DIAGNOSTICS
+# =============================================================================
+# Structured logging with span support for debugging agent loops
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+# thiserror: Define custom error types with Display/Error derives
+# anyhow: Ergonomic error handling with context
+thiserror = "2.0"
+anyhow = "1.0"
+
+# =============================================================================
+# SECURITY
+# =============================================================================
+# Regex for shell command pattern matching (blocklist bypass prevention)
+regex = "1.10"
+# High-performance multi-pattern matching for safety layer injection detection
+aho-corasick = "1.1"
+# XChaCha20-Poly1305 AEAD encryption for secret-at-rest
+chacha20poly1305 = "0.10"
+# Argon2id password-based key derivation
+argon2 = "0.5"
+# SHA-256 digest for binary plugin integrity verification
+sha2 = "0.10"
+# Constant-time comparison for security-sensitive comparisons (token validation)
+subtle = "2.5"
+# Hex encoding/decoding for master key transport
+hex = "0.4"
+# HMAC-SHA256 for CSRF token generation/validation
+ring = "0.17"
+# Platform-specific filesystem flags such as O_NOFOLLOW
+libc = "0.2"
+
+# =============================================================================
+# ASYNC UTILITIES
+# =============================================================================
+# async-trait: Enable async fn in trait definitions (LLMProvider, Tool, Channel)
+# futures: Stream combinators for message bus
+async-trait = "0.1"
+futures = "0.3"
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+# Environment variable loading (.env files)
+dotenvy = "0.15"
+# Lazy static initialization for global config
+once_cell = "1.19"
+# Platform-specific paths (~/.config/hmanlab)
+dirs = "6.0"
+
+# =============================================================================
+# SESSION MANAGEMENT
+# =============================================================================
+# UUID v4 for unique session identifiers (API, cron, security, etc.)
+uuid = { version = "1.6", features = ["v4"] }
+# ULID for ACP session and client IDs (time-ordered, URL-safe, 26 chars)
+ulid = "1.2"
+# Timestamps for message history and local time formatting
+chrono = { version = "0.4", features = ["serde"] }
+
+# =============================================================================
+# SCREENSHOT (optional — feature-gated behind "screenshot")
+# =============================================================================
+# Headless Chromium via Chrome DevTools Protocol for web screenshots
+chromiumoxide = { version = "0.9", optional = true, default-features = false }
+
+# =============================================================================
+# MEMORY BACKENDS (optional — feature-gated)
+# =============================================================================
+# HNSW approximate nearest-neighbor search (memory-hnsw feature)
+instant-distance = { version = "0.6.1", optional = true }
+
+# =============================================================================
+# PDF (optional — feature-gated behind "tool-pdf")
+# =============================================================================
+# Pure-Rust PDF parser for text extraction
+lopdf = { version = "0.40", optional = true }
+
+# =============================================================================
+# CHANNELS
+# =============================================================================
+# WebSocket support for future real-time channels
+tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
+# URL parsing for WebSocket endpoint host extraction
+url = "2"
+# Protobuf decoding for Lark/Feishu pbbp2 WS frames
+prost = "0.14"
+# Telegram bot SDK (minimal features to reduce bloat)
+teloxide = { version = "0.17", features = ["macros", "rustls"], default-features = false }
+# Lock-free concurrent map (typing indicator tracking)
+dashmap = "6"
+# Cancellation tokens for async task lifecycle
+tokio-util = { version = "0.7", features = ["rt"] }
+# Integration helpers
+base64 = "0.22"
+# Temp directory creation for container env files
+tempfile = "3.10"
+# Secure password input (hidden terminal echo)
+rpassword = "7.3"
+# Zip archive extraction for ClawHub skill installs.
+# Pick the flate2+zlib-rs backend explicitly — the umbrella "deflate" feature also
+# pulls zopfli (a high-ratio compression *encoder*) which we never use (read-only
+# zip consumption). Dropping zopfli saves ~100 KiB of code + tables.
+zip = { version = "8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
+# =============================================================================
+# EMAIL CHANNEL (optional — feature-gated behind "channel-email")
+# =============================================================================
+# IMAP IDLE client for real-time inbound email
+async-imap   = { version = "0.11", optional = true, default-features = false, features = ["runtime-tokio"] }
+# SMTP client for outbound email (STARTTLS, builder API)
+lettre       = { version = "0.11", optional = true, default-features = false, features = ["smtp-transport", "tokio1-rustls-tls", "builder"] }
+# Fast RFC 5322 / MIME parser (zero-copy)
+mail-parser  = { version = "0.11",  optional = true }
+# TLS adapter for Tokio async streams (IMAP over TLS)
+tokio-rustls = { version = "0.26", optional = true }
+# Pure-Rust TLS implementation (shared with reqwest, but needs explicit dep for rustls API)
+rustls       = { version = "0.23", optional = true }
+# Mozilla TLS root certificates for rustls
+webpki-roots = { version = "1.0", optional = true }
+
+# =============================================================================
+# MQTT (optional — feature-gated)
+# =============================================================================
+# Lightweight async MQTT client for IoT device communication
+# TEMPORARILY REMOVED: rumqttc 0.25.1 pins rustls-webpki 0.102.8
+# (RUSTSEC-2026-0049, no upstream fix). Code stays behind #[cfg(feature = "mqtt")].
+# Re-add when rumqttc ships a version with updated rustls deps.
+# rumqttc = { version = "0.25", optional = true }
+
+# =============================================================================
+# WHATSAPP WEB (optional — feature-gated behind "whatsapp-web")
+# =============================================================================
+# Pure Rust WhatsApp Web client (Signal Protocol, QR pairing, session persistence)
+wa-rs = { version = "0.2", optional = true }
+# SQLite storage backend for wa-rs session persistence
+wa-rs-sqlite-storage = { version = "0.2", optional = true }
+# Tokio WebSocket transport for wa-rs
+wa-rs-tokio-transport = { version = "0.2", optional = true }
+# HTTP client for wa-rs version/media requests
+wa-rs-ureq-http = { version = "0.2", optional = true }
+# QR code generation for WhatsApp Web terminal pairing
+qrcode = { version = "0.14", optional = true, default-features = false }
+
+# =============================================================================
+# HARDWARE (optional — feature-gated)
+# =============================================================================
+# Serial port communication for peripherals (STM32, Arduino, ESP32)
+tokio-serial = { version = "5", default-features = false, optional = true }
+# probe-rs for STM32/Nucleo memory read (adds ~50 deps; optional)
+probe-rs = { version = "0.31", optional = true }
+
+# =============================================================================
+# XML PARSING
+# =============================================================================
+# Fast XML parser for DOCX extraction and Android uiautomator dump parsing
+quick-xml = "0.39"
+
+# =============================================================================
+# GLOB MATCHING
+# =============================================================================
+# File path pattern matching for FindTool
+glob = "0.3"
+
+# =============================================================================
+# GOOGLE WORKSPACE (optional, --features google)
+# =============================================================================
+gog-gmail    = { git = "https://github.com/qhkm/gogcli-rs", version = "0.1", optional = true }
+gog-calendar = { git = "https://github.com/qhkm/gogcli-rs", version = "0.1", optional = true }
+gog-auth     = { git = "https://github.com/qhkm/gogcli-rs", version = "0.1", optional = true }
+gog-core     = { git = "https://github.com/qhkm/gogcli-rs", version = "0.1", optional = true }
+
+# =============================================================================
+# API SERVER (panel — optional, feature-gated)
+# =============================================================================
+# Axum web framework for panel API server + WebSocket
+axum = { version = "0.8", features = ["ws"], optional = true }
+# Tower HTTP middleware (CORS, static file serving, tracing)
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"], optional = true }
+# JWT token generation/validation for panel auth
+jsonwebtoken = { version = "10", optional = true, features = ["aws_lc_rs"] }
+# Password hashing for panel password auth mode
+bcrypt = { version = "0.19", optional = true }
+unicode-normalization = "0.1.25"
+
+# =============================================================================
+# VERTEX PROVIDER (optional — feature-gated behind "provider-vertex")
+# =============================================================================
+# Google Cloud ADC / access-token credentials for Vertex AI Gemini.
+# Only pulled in when the `provider-vertex` feature is enabled; otherwise the
+# VertexProvider module is cfg'd out entirely and every config entry referencing
+# `providers.vertex` will surface a clear runtime error asking users to rebuild
+# with `--features provider-vertex`.
+google-cloud-auth = { version = "1.7.0", default-features = false, optional = true }
+
+# USB device enumeration — only on platforms nusb supports (Linux, macOS, Windows)
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]
+nusb = { version = "0.2", default-features = false, optional = true }
+
+# Raspberry Pi GPIO (Linux only)
+[target.'cfg(target_os = "linux")'.dependencies]
+rppal = { version = "0.22", optional = true }
+# Linux Landlock LSM sandbox (kernel 5.13+)
+landlock = { version = "0.4.4", optional = true }
+
+[features]
+default = []
+# BM25 keyword scoring memory backend (adds ~0 extra deps for now)
+memory-bm25 = []
+# Embedding-based memory backend using LLM provider's embed() method
+memory-embedding = []
+# HNSW approximate nearest-neighbor memory backend (instant-distance)
+memory-hnsw = ["dep:instant-distance"]
+# Web screenshot tool via headless Chromium (Chrome DevTools Protocol)
+screenshot = ["chromiumoxide"]
+# PDF text extraction tool via lopdf
+tool-pdf = ["lopdf"]
+# Email channel: IMAP IDLE (inbound) + SMTP (outbound) via TLS
+channel-email = ["async-imap", "lettre", "mail-parser", "tokio-rustls", "rustls", "webpki-roots"]
+# Hardware discovery + serial peripherals (USB enumeration, serial port communication)
+hardware = ["nusb", "tokio-serial"]
+# Raspberry Pi GPIO peripheral (Linux only, requires rppal)
+peripheral-rpi = ["rppal"]
+# ESP32 peripheral (wraps serial transport with ESP32 board profile)
+peripheral-esp32 = ["hardware"]
+# Debug probe for STM32/Nucleo memory read via USB (adds ~50 deps)
+probe = ["probe-rs"]
+# MQTT channel — temporarily disabled (RUSTSEC-2026-0049, see dep comment above)
+# mqtt = ["dep:rumqttc"]
+# WhatsApp Web native client (wa-rs + SQLite session storage)
+whatsapp-web = [
+    "dep:wa-rs",
+    "dep:wa-rs-sqlite-storage",
+    "dep:wa-rs-tokio-transport",
+    "dep:wa-rs-ureq-http",
+    "dep:qrcode",
+]
+# Android device control tool via ADB (adds quick-xml for UI hierarchy parsing)
+android = []
+# Linux sandbox runtimes (Linux-only, require respective binaries except landlock)
+sandbox-landlock   = ["dep:landlock"]
+sandbox-firejail   = []
+sandbox-bubblewrap = []
+# Vertex AI provider (Google Cloud Gemini via ADC / access token)
+# Pulls in google-cloud-auth and its transitive google-cloud-gax / google-cloud-rpc stack.
+provider-vertex = ["dep:google-cloud-auth"]
+# Google Workspace tools (Gmail + Calendar) via gogcli-rs
+google = ["dep:gog-gmail", "dep:gog-calendar", "dep:gog-auth", "dep:gog-core"]
+# Control panel API server + dashboard (axum, JWT, bcrypt)
+panel = ["dep:axum", "dep:tower-http", "dep:jsonwebtoken", "dep:bcrypt"]
+
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.14"
+tower = { version = "0.5", features = ["util"] }
+# Benchmarking framework
+criterion = { version = "0.8", features = ["async_tokio"] }
+
+[[bench]]
+name = "message_bus"
+harness = false
+
+[profile.test]
+opt-level = 1
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[[bin]]
+name = "hmanlab"
+path = "src/main.rs"

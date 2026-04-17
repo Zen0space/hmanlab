@@ -1,0 +1,459 @@
+//! Channel factory/registration helpers.
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use tracing::{info, warn};
+
+use crate::bus::MessageBus;
+use crate::config::{Config, MemoryBackend};
+use crate::providers::{configured_provider_models, configured_provider_names};
+
+use super::acp_http::AcpHttpChannel;
+use super::email_channel::EmailChannel;
+use super::lark::LarkChannel;
+use super::plugin::{default_channel_plugins_dir, discover_channel_plugins, ChannelPluginAdapter};
+use super::webhook::{WebhookChannel, WebhookChannelConfig};
+use super::WhatsAppCloudChannel;
+use super::{BaseChannelConfig, ChannelManager, DiscordChannel, SlackChannel, TelegramChannel};
+
+/// Register all configured channels that currently have implementations.
+///
+/// Returns the number of registered channels.
+pub async fn register_configured_channels(
+    manager: &ChannelManager,
+    bus: Arc<MessageBus>,
+    config: &Config,
+) -> usize {
+    register_configured_channels_with_approval(manager, bus, config, None).await
+}
+
+/// Register all configured channels with an optional shared approval store.
+pub async fn register_configured_channels_with_approval(
+    manager: &ChannelManager,
+    bus: Arc<MessageBus>,
+    config: &Config,
+    approval_store: Option<crate::tools::approval_store::ApprovalRequestStore>,
+) -> usize {
+    // Telegram
+    if let Some(ref telegram_config) = config.channels.telegram {
+        if telegram_config.enabled {
+            if telegram_config.token.is_empty() {
+                warn!("Telegram channel enabled but token is empty");
+            } else {
+                manager
+                    .register(Box::new(TelegramChannel::new(
+                        telegram_config.clone(),
+                        bus.clone(),
+                        config.agents.defaults.model.clone(),
+                        configured_provider_names(config)
+                            .into_iter()
+                            .map(|name| name.to_string())
+                            .collect(),
+                        configured_provider_models(config),
+                        !matches!(config.memory.backend, MemoryBackend::Disabled),
+                        approval_store.clone(),
+                    )))
+                    .await;
+                info!("Registered Telegram channel");
+            }
+        }
+    }
+
+    // Slack
+    if let Some(ref slack_config) = config.channels.slack {
+        if slack_config.enabled {
+            if slack_config.bot_token.is_empty() {
+                warn!("Slack channel enabled but bot token is empty");
+            } else {
+                manager
+                    .register(Box::new(SlackChannel::new(
+                        slack_config.clone(),
+                        bus.clone(),
+                    )))
+                    .await;
+                info!("Registered Slack channel");
+            }
+        }
+    }
+
+    // Discord
+    if let Some(ref discord_config) = config.channels.discord {
+        if discord_config.enabled {
+            if discord_config.token.is_empty() {
+                warn!("Discord channel enabled but token is empty");
+            } else {
+                manager
+                    .register(Box::new(DiscordChannel::new(
+                        discord_config.clone(),
+                        bus.clone(),
+                    )))
+                    .await;
+                info!("Registered Discord channel");
+            }
+        }
+    }
+    // Webhook
+    if let Some(ref webhook_config) = config.channels.webhook {
+        if webhook_config.enabled {
+            let runtime_config = WebhookChannelConfig {
+                bind_address: webhook_config.bind_address.clone(),
+                port: webhook_config.port,
+                path: webhook_config.path.clone(),
+                auth_token: webhook_config.auth_token.clone(),
+                signature_secret: webhook_config.signature_secret.clone(),
+                signature_header: webhook_config.signature_header.clone(),
+                sender_id: webhook_config.sender_id.clone(),
+                chat_id: webhook_config.chat_id.clone(),
+                trust_payload_identity: webhook_config.trust_payload_identity,
+            };
+            let base_config = BaseChannelConfig {
+                name: "webhook".to_string(),
+                allowlist: webhook_config.allow_from.clone(),
+                deny_by_default: webhook_config.deny_by_default,
+            };
+            manager
+                .register(Box::new(WebhookChannel::new(
+                    runtime_config,
+                    base_config,
+                    bus.clone(),
+                )))
+                .await;
+            info!(
+                "Registered Webhook channel on {}:{}",
+                webhook_config.bind_address, webhook_config.port
+            );
+        }
+    }
+
+    // WhatsApp Web (native via wa-rs) — requires whatsapp-web feature
+    #[cfg(feature = "whatsapp-web")]
+    if let Some(ref wa_web_config) = config.channels.whatsapp_web {
+        if wa_web_config.enabled {
+            manager
+                .register(Box::new(super::WhatsAppWebChannel::new(
+                    wa_web_config.clone(),
+                    bus.clone(),
+                )))
+                .await;
+            info!("Registered WhatsApp Web channel (native)");
+        }
+    }
+
+    #[cfg(not(feature = "whatsapp-web"))]
+    if let Some(ref wa_web_config) = config.channels.whatsapp_web {
+        if wa_web_config.enabled {
+            warn!(
+                "WhatsApp Web channel is enabled in config but this build was compiled without the whatsapp-web feature"
+            );
+        }
+    }
+
+    // WhatsApp Cloud API (official)
+    if let Some(ref wac_config) = config.channels.whatsapp_cloud {
+        if wac_config.enabled {
+            if wac_config.phone_number_id.is_empty() || wac_config.access_token.is_empty() {
+                warn!(
+                    "WhatsApp Cloud channel enabled but phone_number_id or access_token is empty"
+                );
+            } else {
+                let transcriber = crate::transcription::TranscriberService::from_config(config);
+                manager
+                    .register(Box::new(WhatsAppCloudChannel::new(
+                        wac_config.clone(),
+                        bus.clone(),
+                        transcriber,
+                    )))
+                    .await;
+                info!(
+                    "Registered WhatsApp Cloud API channel on {}:{}",
+                    wac_config.bind_address, wac_config.port
+                );
+            }
+        }
+    }
+    // Lark / Feishu (WS long-connection)
+    if let Some(ref lark_cfg) = config.channels.lark {
+        if lark_cfg.enabled {
+            if lark_cfg.app_id.is_empty() || lark_cfg.app_secret.is_empty() {
+                warn!("Lark channel enabled but app_id or app_secret is empty");
+            } else {
+                manager
+                    .register(Box::new(LarkChannel::new(lark_cfg.clone(), bus.clone())))
+                    .await;
+                let region = if lark_cfg.feishu { "Feishu" } else { "Lark" };
+                info!("Registered {} channel (WS long-connection)", region);
+            }
+        }
+    }
+    if config
+        .channels
+        .feishu
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        warn!("Feishu channel is enabled but not implemented");
+    }
+    if config
+        .channels
+        .maixcam
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        warn!("MaixCam channel is enabled but not implemented");
+    }
+    if config
+        .channels
+        .qq
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        warn!("QQ channel is enabled but not implemented");
+    }
+    if config
+        .channels
+        .dingtalk
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        warn!("DingTalk channel is enabled but not implemented");
+    }
+
+    // Email (IMAP IDLE + SMTP) — requires channel-email feature
+    if let Some(ref email_cfg) = config.channels.email {
+        if email_cfg.enabled && !email_cfg.username.is_empty() {
+            manager
+                .register(Box::new(EmailChannel::new(email_cfg.clone(), bus.clone())))
+                .await;
+            info!(
+                "Registered Email channel (IMAP IDLE on {})",
+                email_cfg.imap_host
+            );
+        } else if !email_cfg.enabled {
+            // Channel is present in config but not enabled — skip silently.
+        } else {
+            warn!("Email channel configured but username is empty");
+        }
+    }
+
+    // Serial (UART) — requires hardware feature
+    #[cfg(feature = "hardware")]
+    if let Some(ref serial_config) = config.channels.serial {
+        if serial_config.enabled {
+            if serial_config.port.is_empty() {
+                warn!("Serial channel enabled but port is empty");
+            } else {
+                manager
+                    .register(Box::new(super::serial::SerialChannel::new(
+                        serial_config.clone(),
+                        bus.clone(),
+                    )))
+                    .await;
+                info!("Registered Serial channel on {}", serial_config.port);
+            }
+        }
+    }
+
+    // MQTT — requires mqtt feature
+    #[cfg(feature = "mqtt")]
+    if let Some(ref mqtt_config) = config.channels.mqtt {
+        if mqtt_config.enabled {
+            if mqtt_config.broker_url.is_empty() {
+                warn!("MQTT channel enabled but broker_url is empty");
+            } else {
+                manager
+                    .register(Box::new(super::mqtt::MqttChannel::new(
+                        mqtt_config.clone(),
+                        bus.clone(),
+                    )))
+                    .await;
+                // Redact credentials from broker URL before logging.
+                let broker_display = mqtt_config
+                    .broker_url
+                    .rsplit_once('@')
+                    .map(|(_, host)| host)
+                    .unwrap_or(&mqtt_config.broker_url);
+                info!("Registered MQTT channel (broker: {})", broker_display);
+            }
+        }
+    }
+
+    // ACP (Agent Client Protocol) — HTTP transport only in gateway mode.
+    // The ACP stdio transport is exclusively for the `hmanlab acp` subcommand
+    // (where the process is spawned as a subprocess by an ACP client). Registering
+    // it here would consume the gateway process's own stdin, which is never a valid
+    // ACP client connection. Use `channels.acp.http` to expose ACP in gateway mode.
+    if let Some(ref acp_config) = config.channels.acp {
+        if acp_config.enabled {
+            warn!(
+                "channels.acp.enabled has no effect in gateway mode; \
+                 ACP stdio is only used by `hmanlab acp`. \
+                 To expose ACP in gateway mode, set channels.acp.http.enabled = true."
+            );
+        }
+        // HTTP transport — registered as a separate channel ("acp_http") so that
+        // sessions are independent and bus routing is unambiguous.
+        if let Some(ref http_cfg) = acp_config.http {
+            if http_cfg.enabled {
+                let http_base = BaseChannelConfig {
+                    name: "acp_http".to_string(),
+                    allowlist: acp_config.allow_from.clone(),
+                    deny_by_default: acp_config.deny_by_default,
+                };
+                manager
+                    .register(Box::new(AcpHttpChannel::new(
+                        acp_config.clone(),
+                        http_cfg.clone(),
+                        http_base,
+                        bus.clone(),
+                    )))
+                    .await;
+                info!(
+                    "Registered ACP channel (HTTP on {}:{})",
+                    http_cfg.bind, http_cfg.port
+                );
+            }
+        }
+    }
+
+    // Channel plugins
+    let plugin_dir: Option<PathBuf> = config
+        .channels
+        .channel_plugins_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .or_else(default_channel_plugins_dir);
+
+    if let Some(ref dir) = plugin_dir {
+        let discovered = discover_channel_plugins(dir);
+        for (manifest, plugin_path) in discovered {
+            let name = manifest.name.clone();
+            let base_config = BaseChannelConfig::new(&name);
+            let adapter = ChannelPluginAdapter::new(manifest, plugin_path, base_config);
+            manager.register(Box::new(adapter)).await;
+            info!("Registered channel plugin: {}", name);
+        }
+    }
+
+    manager.channel_count().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bus::MessageBus;
+    use crate::config::{
+        AcpChannelConfig, Config, SlackConfig, TelegramConfig, WhatsAppCloudConfig,
+    };
+
+    #[tokio::test]
+    async fn test_register_configured_channels_registers_telegram() {
+        let bus = Arc::new(MessageBus::new());
+        let mut config = Config::default();
+        config.channels.telegram = Some(TelegramConfig {
+            enabled: true,
+            token: "test-token".to_string(),
+            allow_from: Vec::new(),
+            ..Default::default()
+        });
+
+        let manager = ChannelManager::new(bus.clone(), config.clone());
+        let count = register_configured_channels(&manager, bus, &config).await;
+
+        assert_eq!(count, 1);
+        assert!(manager.has_channel("telegram").await);
+    }
+
+    #[tokio::test]
+    async fn test_register_configured_channels_registers_slack() {
+        let bus = Arc::new(MessageBus::new());
+        let mut config = Config::default();
+        config.channels.slack = Some(SlackConfig {
+            enabled: true,
+            bot_token: "xoxb-test-token".to_string(),
+            app_token: String::new(),
+            allow_from: Vec::new(),
+            ..Default::default()
+        });
+
+        let manager = ChannelManager::new(bus.clone(), config.clone());
+        let count = register_configured_channels(&manager, bus, &config).await;
+
+        assert_eq!(count, 1);
+        assert!(manager.has_channel("slack").await);
+    }
+
+    #[tokio::test]
+    async fn test_register_configured_channels_registers_whatsapp_cloud() {
+        let bus = Arc::new(MessageBus::new());
+        let mut config = Config::default();
+        config.channels.whatsapp_cloud = Some(WhatsAppCloudConfig {
+            enabled: true,
+            phone_number_id: "123456".to_string(),
+            access_token: "test-token".to_string(),
+            webhook_verify_token: "verify".to_string(),
+            port: 0,
+            ..Default::default()
+        });
+
+        let manager = ChannelManager::new(bus.clone(), config.clone());
+        let count = register_configured_channels(&manager, bus, &config).await;
+
+        assert_eq!(count, 1);
+        assert!(manager.has_channel("whatsapp_cloud").await);
+    }
+
+    #[tokio::test]
+    async fn test_register_configured_channels_acp_enabled_alone_registers_nothing() {
+        // channels.acp.enabled is a no-op in gateway mode (stdio is only for
+        // `hmanlab acp`). Setting it without an HTTP config must not register
+        // any channel.
+        let bus = Arc::new(MessageBus::new());
+        let mut config = Config::default();
+        config.channels.acp = Some(AcpChannelConfig {
+            enabled: true,
+            allow_from: Vec::new(),
+            deny_by_default: false,
+            http: None,
+            session_ttl_secs: None,
+        });
+
+        let manager = ChannelManager::new(bus.clone(), config.clone());
+        let count = register_configured_channels(&manager, bus, &config).await;
+
+        assert_eq!(count, 0);
+        assert!(!manager.has_channel("acp").await);
+    }
+
+    #[tokio::test]
+    async fn test_register_configured_channels_registers_acp_http() {
+        use crate::config::AcpHttpConfig;
+        let bus = Arc::new(MessageBus::new());
+        let mut config = Config::default();
+        // Use port 0 so the OS assigns an ephemeral port; the channel is
+        // registered but start() is not called in this test.
+        // Note: channels.acp.enabled is not required for HTTP registration.
+        config.channels.acp = Some(AcpChannelConfig {
+            http: Some(AcpHttpConfig {
+                enabled: true,
+                port: 0,
+                ..AcpHttpConfig::default()
+            }),
+            ..AcpChannelConfig::default()
+        });
+
+        let manager = ChannelManager::new(bus.clone(), config.clone());
+        let count = register_configured_channels(&manager, bus, &config).await;
+
+        assert_eq!(
+            count, 1,
+            "only acp_http must be registered; stdio is never registered by gateway"
+        );
+        assert!(!manager.has_channel("acp").await);
+        assert!(manager.has_channel("acp_http").await);
+    }
+}
