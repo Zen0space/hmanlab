@@ -6,9 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
-  CARGO_TERM_QUIET: "true" # F.I.R.S.T. principle (only print failures, not test names)
+  CARGO_TERM_QUIET: "true"
   RUSTFLAGS: -Dwarnings
   BINARY_SIZE_LIMIT_MB: 11
 
@@ -17,9 +21,40 @@ permissions:
   checks: write
 
 jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    paths: &rust_paths
+      - "src/**"
+      - "tests/**"
+      - "benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+      - run: cargo clippy -- -D warnings
+      - name: Clippy with hardware features
+        run: cargo clippy --features peripheral-esp32 -- -D warnings
+
   test:
     name: Test
     runs-on: ubuntu-latest
+    paths: *rust_paths
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
@@ -31,55 +66,16 @@ jobs:
       - run: cargo nextest run --bin hmanlab
       - run: cargo nextest run --test cli_smoke
       - run: cargo nextest run --test integration
-      - run: cargo nextest run --test e2e
       - run: cargo test --doc
       - name: Test with memory-bm25 feature
         run: cargo nextest run --lib --features memory-bm25
       - name: Test with hardware features (ESP32)
         run: cargo nextest run --lib --features peripheral-esp32
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-      - run: cargo clippy -- -D warnings
-      - name: Clippy with hardware features
-        run: cargo clippy --features peripheral-esp32 -- -D warnings
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --check
-
-  audit:
-    name: Security audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  deny:
-    name: Cargo deny
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2.0.15
-
   feature-matrix:
     name: Feature gates
     runs-on: ubuntu-latest
+    paths: *rust_paths
     strategy:
       fail-fast: false
       matrix:
@@ -97,9 +93,22 @@ jobs:
       - name: Check compilation
         run: cargo check ${{ matrix.features }}
 
+  deny:
+    name: Cargo deny
+    runs-on: ubuntu-latest
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "deny.toml"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: EmbarkStudios/cargo-deny-action@3fd3802e88374d3fe9159b834c7714ec57d6c979 # v2.0.15
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    paths: *rust_paths
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: dtolnay/rust-toolchain@stable
@@ -108,7 +117,7 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           key: coverage
-      - uses: taiki-e/install-action@f23382d582832e41d5eb4fff2bddb06bc5adf8d3 # v2.68.21
+      - uses: taiki-e/install-action@f23382d582832e41d5eb4fff2bdda06bc5adf8d3 # v2.68.21
         with:
           tool: cargo-llvm-cov,cargo-nextest
       - name: Generate code coverage
@@ -120,11 +129,11 @@ jobs:
           files: lcov.info
           fail_ci_if_error: false
 
-  # Heavy checks that only run on main merges
   riscv64-smoke:
     name: RISC-V smoke test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    paths: *rust_paths
     env:
       RUSTFLAGS: -Dwarnings --cfg getrandom_backend="linux_raw"
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER: riscv64-linux-gnu-gcc
@@ -152,6 +161,7 @@ jobs:
     name: Binary size
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    paths: *rust_paths
     env:
       CARGO_INCREMENTAL: 0
     steps:

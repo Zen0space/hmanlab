@@ -3,6 +3,12 @@ name: E2E Tests
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tests/e2e/**"
 
 env:
   CARGO_TERM_COLOR: always
