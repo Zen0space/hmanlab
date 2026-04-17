@@ -12,6 +12,10 @@ env:
   RUSTFLAGS: -Dwarnings
   BINARY_SIZE_LIMIT_MB: 11
 
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   test:
     name: Test
