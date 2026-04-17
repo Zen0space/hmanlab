@@ -17,10 +17,10 @@ echo "Backing up tenant volumes to $BACKUP_DIR"
 count=0
 for volume in $(docker volume ls -q | grep -E ".*-data$"); do
     # Check if it's a hmanlab tenant volume
-    container=$(docker ps --filter "volume=$volume" --format "{{.Names}}" | grep "^zc-" | head -1)
+    container=$(docker ps --filter "volume=$volume" --format "{{.Names}}" | grep "^hmanlab-" | head -1)
     [ -z "$container" ] && continue
 
-    tenant=$(echo "$container" | sed 's/^zc-//')
+    tenant=$(echo "$container" | sed 's/^hmanlab-//')
     echo "  Backing up $tenant..."
 
     docker run --rm \

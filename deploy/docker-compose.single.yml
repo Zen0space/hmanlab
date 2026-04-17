@@ -14,7 +14,7 @@
 
 services:
   hmanlab:
-    image: hmanlab:latest
+    image: hmanlab/hmanlab:latest
     container_name: hmanlab
     restart: unless-stopped
     volumes:

@@ -3,6 +3,7 @@ set -eu
 
 REPO="qhkm/hmanlab"
 BINARY="hmanlab"
+DOCKER_IMAGE="hmanlab/hmanlab:latest"
 
 # --- Detect platform ---
 
