@@ -1,0 +1,51 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation
+docs/
+*.md
+
+# Development files
+!scripts/artifacts/
+.env
+.env.*
+*.log
+
+# Test files
+tests/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Landing pages
+landing/
+
+# Project
+assets/
+deploy/
+examples/
+panel/
+install.sh
+Makefile
+
+# AI
+skills/
+.kimiignore

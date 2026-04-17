@@ -1,0 +1,100 @@
+//! HmanLab - Ultra-lightweight personal AI assistant
+
+pub mod agent;
+#[cfg(feature = "panel")]
+pub mod api;
+pub mod audit;
+pub mod auth;
+pub mod batch;
+pub mod bus;
+pub mod cache;
+pub mod channels;
+pub mod config;
+pub mod cron;
+pub mod deps;
+pub mod devices;
+pub mod error;
+pub mod gateway;
+pub mod hands;
+pub mod hardware;
+pub mod health;
+pub mod heartbeat;
+pub mod hooks;
+pub mod kernel;
+pub mod mcp_server;
+pub mod memory;
+pub mod migrate;
+pub mod peripherals;
+pub mod plugins;
+pub mod providers;
+pub mod routines;
+pub mod runtime;
+pub mod safety;
+pub use agent::{CompactionStrategy, ContextMonitor};
+pub use config::CompactionConfig;
+pub use safety::taint::{TaintConfig, TaintEngine, TaintLabel, TaintViolation};
+pub use safety::{SafetyConfig, SafetyLayer, SafetyResult};
+pub mod r8r_bridge;
+pub mod security;
+pub mod session;
+pub mod skills;
+pub mod tools;
+pub mod transcription;
+pub mod tunnel;
+pub mod utils;
+
+pub use agent::{AgentLoop, ContextBuilder, SwarmScratchpad, ZeptoAgent, ZeptoAgentBuilder};
+pub use bus::{InboundMessage, MediaAttachment, MediaType, MessageBus, OutboundMessage};
+#[cfg(feature = "whatsapp-web")]
+pub use channels::WhatsAppWebChannel;
+pub use channels::{
+    AcpChannel, BaseChannelConfig, Channel, ChannelManager, ChannelPluginAdapter, SlackChannel,
+    TelegramChannel, WhatsAppCloudChannel,
+};
+pub use config::Config;
+pub use cron::{CronJob, CronPayload, CronSchedule, CronService, OnMiss};
+pub use error::{ProviderError, Result, ZeptoError};
+pub use heartbeat::{ensure_heartbeat_file, HeartbeatResult, HeartbeatService, HEARTBEAT_PROMPT};
+pub use providers::{
+    ChatOptions, ClaudeProvider, LLMProvider, LLMResponse, LLMToolCall, OpenAIProvider,
+    ToolDefinition, Usage,
+};
+pub use runtime::{
+    available_runtimes, create_runtime, CommandOutput, ContainerConfig, ContainerRuntime,
+    DockerRuntime, NativeRuntime, RuntimeError, RuntimeResult,
+};
+
+pub use config::ContainerAgentBackend;
+#[cfg(target_os = "macos")]
+pub use gateway::is_apple_container_available;
+pub use gateway::{
+    generate_env_file_content, is_docker_available, is_docker_available_with_binary,
+    parse_marked_response, resolve_backend, AgentRequest, AgentResponse, AgentResult,
+    ContainerAgentProxy, ResolvedBackend, StartupGuard, RESPONSE_END_MARKER, RESPONSE_START_MARKER,
+};
+pub use health::{
+    get_rss_bytes, health_port, start_health_server, start_health_server_legacy,
+    start_periodic_usage_flush, HealthCheck, HealthRegistry, HealthStatus, UsageMetrics,
+};
+
+#[cfg(target_os = "macos")]
+pub use runtime::AppleContainerRuntime;
+pub use security::{
+    validate_extra_mounts, validate_path_in_workspace, AgentMode, AgentModeConfig,
+    CategoryPermission, DeviceInfo, ModePolicy, PairedDevice, PairingManager, SafePath,
+    ShellAllowlistMode, ShellSecurityConfig,
+};
+pub use session::{Message, Role, Session, SessionManager, ToolCall};
+#[cfg(feature = "screenshot")]
+pub use tools::screenshot::WebScreenshotTool;
+#[cfg(feature = "android")]
+pub use tools::AndroidTool;
+#[cfg(feature = "google")]
+pub use tools::GoogleTool;
+pub use tools::{
+    composed::CreateToolTool, cron::CronTool, custom::CustomTool, delegate::DelegateTool,
+    spawn::SpawnTool, BinaryPluginTool, BrowserTool, DocxReadTool, EchoTool, FindTool, GitTool,
+    GoogleSheetsTool, GrepTool, HardwareTool, HttpRequestTool, MemoryGetTool, MemorySearchTool,
+    MessageTool, PdfReadTool, ProjectTool, R8rTool, ReminderTool, SearxngSearchTool, StripeTool,
+    Tool, ToolCategory, ToolContext, ToolRegistry, WebFetchTool, WebSearchTool, WhatsAppTool,
+};

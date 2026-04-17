@@ -1,0 +1,45 @@
+# E2E Test Infrastructure for HmanLab
+#
+# Usage:
+#   docker compose -f tests/e2e/docker-compose.yml up --build
+#
+# This compose file provides:
+#   - hmanlab: The main agent service built from the project Dockerfile
+#   - mock-llm:  A lightweight HTTP echo service for testing without real API keys
+#
+# Environment variables:
+#   HMANLAB_E2E_LIVE=1          - Enable live API tests (requires real keys)
+#   HMANLAB_PROVIDERS_ANTHROPIC_API_KEY - Anthropic API key (optional, live tests only)
+#   HMANLAB_PROVIDERS_OPENAI_API_KEY    - OpenAI API key (optional, live tests only)
+
+services:
+  hmanlab:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      - RUST_LOG=hmanlab=debug
+      - HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=${HMANLAB_PROVIDERS_ANTHROPIC_API_KEY:-}
+      - HMANLAB_PROVIDERS_OPENAI_API_KEY=${HMANLAB_PROVIDERS_OPENAI_API_KEY:-}
+    networks:
+      - e2e-net
+    volumes:
+      - hmanlab-data:/data
+    depends_on:
+      mock-llm:
+        condition: service_started
+
+  mock-llm:
+    image: hashicorp/http-echo:latest
+    command: ["-text", '{"id":"mock-1","object":"chat.completion","choices":[{"message":{"role":"assistant","content":"mock response"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}']
+    ports:
+      - "5678:5678"
+    networks:
+      - e2e-net
+
+networks:
+  e2e-net:
+    driver: bridge
+
+volumes:
+  hmanlab-data:

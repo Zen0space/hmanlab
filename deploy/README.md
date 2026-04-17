@@ -1,0 +1,184 @@
+# Deployment Guide
+
+Pre-built templates for deploying HmanLab to various platforms.
+
+## One-Click Deploy
+
+### PaaS Platforms
+
+| Platform | Method |
+|----------|--------|
+| DigitalOcean | [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/qhkm/hmanlab/tree/main) |
+| Railway | [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy?template=https://github.com/qhkm/hmanlab) |
+| Render | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/qhkm/hmanlab) |
+| Fly.io | [Deploy guide](https://fly.io/docs/launch/) with `deploy/fly.toml` |
+
+### Any VPS
+
+The fastest way to deploy on any Linux VPS:
+
+```bash
+curl -fsSL https://hmanlab.com/setup.sh | bash
+```
+
+This interactive wizard will:
+- Download the latest HmanLab binary
+- Configure your LLM provider API key
+- Configure your messaging channel (Telegram, Slack, Discord, or Webhook)
+- Install and start a systemd service
+
+**Options:**
+- `--docker` - Deploy as a Docker container instead of bare binary
+- `--uninstall` - Clean removal of HmanLab and all configuration
+
+## Prerequisites
+
+- Docker installed (for building the image)
+- A Telegram bot token (from @BotFather) or other channel credentials
+- An LLM provider API key (Anthropic or OpenAI)
+
+## Quick Start (Any VPS)
+
+The simplest deployment — a single Docker container on any VPS.
+
+```bash
+# 1. Clone and build
+git clone https://github.com/qhkm/hmanlab.git
+cd hmanlab
+docker build -t hmanlab .
+
+# 2. Configure
+cp deploy/.env.example .env
+nano .env  # Set your API keys and bot token
+
+# 3. Run
+docker compose -f deploy/docker-compose.single.yml up -d
+
+# 4. Check logs
+docker compose -f deploy/docker-compose.single.yml logs -f
+
+# 5. Stop
+docker compose -f deploy/docker-compose.single.yml down
+```
+
+Resources: ~6MB RAM, ~4MB disk for binary.
+
+## Platforms
+
+### Docker Compose (Single Tenant)
+
+**File:** `docker-compose.single.yml`
+
+Best for: Personal VPS, single-agent deployments.
+
+```bash
+cp deploy/.env.example .env
+nano .env
+docker compose -f deploy/docker-compose.single.yml up -d
+```
+
+### Docker Compose (Multi-Tenant)
+
+**File:** `docker-compose.multi.yml`
+
+Best for: Running multiple tenants on one VPS with shared infrastructure.
+
+```bash
+cp deploy/.env.example .env
+nano .env
+docker compose -f deploy/docker-compose.multi.yml up -d
+```
+
+### Fly.io
+
+**File:** `fly.toml`
+
+Best for: Zero-ops deployment with auto-scaling. Free tier available.
+
+```bash
+# Install flyctl
+curl -L https://fly.io/install.sh | sh
+
+# Deploy
+cd deploy
+fly auth login
+fly launch --no-deploy --dockerfile ../Dockerfile
+
+# Set secrets
+fly secrets set HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=sk-ant-...
+fly secrets set HMANLAB_CHANNELS_TELEGRAM_BOT_TOKEN=...
+
+# Deploy
+fly deploy --dockerfile ../Dockerfile
+```
+
+Default region: Singapore (`sin`). Edit `primary_region` in `fly.toml` to change.
+
+### Railway
+
+**File:** `railway.json`
+
+Best for: One-click deploy from GitHub.
+
+1. Push your repo to GitHub
+2. Go to [railway.com/new](https://railway.com/new)
+3. Select your repository
+4. Set environment variables in the dashboard:
+   - `HMANLAB_PROVIDERS_ANTHROPIC_API_KEY`
+   - `HMANLAB_CHANNELS_TELEGRAM_BOT_TOKEN`
+5. Deploy
+
+### Render
+
+**File:** `render.yaml`
+
+Best for: Auto-deploy on push with managed infrastructure.
+
+1. Push your repo to GitHub
+2. Go to [dashboard.render.com](https://dashboard.render.com)
+3. New > Web Service > Connect your repo
+4. Set root directory to project root
+5. Set environment variables in dashboard
+6. Deploy
+
+## Environment Variables
+
+See `.env.example` for all available variables. Key ones:
+
+| Variable | Required | Description |
+|---|---|---|
+| `HMANLAB_PROVIDERS_ANTHROPIC_API_KEY` | Yes* | Anthropic API key |
+| `HMANLAB_PROVIDERS_OPENAI_API_KEY` | Yes* | OpenAI API key |
+| `HMANLAB_CHANNELS_TELEGRAM_BOT_TOKEN` | For Telegram | Telegram bot token |
+| `HMANLAB_CHANNELS_SLACK_BOT_TOKEN` | For Slack | Slack bot token |
+| `HMANLAB_CHANNELS_DISCORD_BOT_TOKEN` | For Discord | Discord bot token |
+| `RUST_LOG` | No | Log level (default: `hmanlab=info`) |
+
+*At least one LLM provider API key is required.
+
+## Health Checks
+
+All templates include health check configuration pointing to `/healthz` on port 9090.
+
+```bash
+# Manual check
+curl http://localhost:9090/healthz
+```
+
+## Persistent Data
+
+All templates mount a `/data` volume for session persistence and memory storage. Data survives container restarts and redeployments.
+
+## Updating
+
+```bash
+# Pull latest code
+git pull
+
+# Rebuild and restart
+docker build -t hmanlab .
+docker compose -f deploy/docker-compose.single.yml up -d
+```
+
+On Fly.io: `fly deploy --dockerfile ../Dockerfile`
+On Railway/Render: Push to GitHub — auto-deploys on push.

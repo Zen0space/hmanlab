@@ -1,0 +1,1368 @@
+//! Interactive onboarding wizard (hmanlab onboard).
+
+use std::io::{self, Write};
+
+use anyhow::{Context, Result};
+
+use hmanlab::channels::model_switch::KNOWN_MODELS;
+use hmanlab::channels::persona_switch;
+use hmanlab::config::{Config, MemoryBackend, MemoryCitationsMode, RuntimeType};
+use hmanlab::providers::configured_provider_names;
+
+use super::common::{memory_backend_label, memory_citations_label, read_line, read_secret};
+
+/// Run the provider → API key → model selection flow.
+///
+/// Pick provider first, then configure API key, then pick model.
+async fn configure_providers(config: &mut Config) -> Result<()> {
+    let config_path = Config::path();
+
+    println!("Provider Setup");
+    println!("==============");
+    println!();
+    println!("Which AI provider would you like to use?");
+    println!("  1. Anthropic (Claude) - Recommended");
+    println!("  2. OpenAI (GPT-4, o3, etc.)");
+    println!("  3. OpenRouter (400+ models via single API key)");
+    println!("  4. Skip (configure later)");
+    println!();
+
+    let primary = loop {
+        print!("Choice [1]: ");
+        io::stdout().flush()?;
+
+        let input = read_line()?;
+        let choice = input.trim();
+
+        match choice {
+            "" | "1" => break "anthropic",
+            "2" => break "openai",
+            "3" => break "openrouter",
+            "4" => {
+                println!("Skipping provider setup. You can configure later by:");
+                println!("  - Editing {:?}", config_path);
+                println!("  - Setting environment variables:");
+                println!("    HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=sk-ant-...");
+                println!("    HMANLAB_PROVIDERS_OPENAI_API_KEY=sk-...");
+                println!("    HMANLAB_PROVIDERS_OPENROUTER_API_KEY=sk-or-...");
+                return Ok(());
+            }
+            _ => {
+                println!("Invalid choice. Please enter 1, 2, 3, or 4.");
+                continue;
+            }
+        }
+    };
+
+    // Step 2: Configure API key for chosen provider
+    println!();
+    match primary {
+        "anthropic" => configure_anthropic(config).await?,
+        "openai" => configure_openai(config).await?,
+        "openrouter" => configure_openrouter(config).await?,
+        _ => {}
+    }
+
+    // Step 3: Fetch models and let user pick
+    configure_model_for_provider(config, primary).await?;
+
+    // Offer to add more providers
+    println!();
+    print!("Add another provider? [y/N]: ");
+    io::stdout().flush()?;
+    let more = read_line()?.to_ascii_lowercase();
+    if matches!(more.trim(), "y" | "yes") {
+        println!();
+        println!("Which additional provider?");
+        let mut options = Vec::new();
+        if primary != "anthropic" {
+            options.push(("anthropic", "Anthropic (Claude)"));
+        }
+        if primary != "openai" {
+            options.push(("openai", "OpenAI (GPT-4, o3, etc.)"));
+        }
+        if primary != "openrouter" {
+            options.push(("openrouter", "OpenRouter (400+ models)"));
+        }
+        for (i, (_, label)) in options.iter().enumerate() {
+            println!("  {}. {}", i + 1, label);
+        }
+        println!("  s. Skip");
+        println!();
+        print!("Choice: ");
+        io::stdout().flush()?;
+        let input = read_line()?;
+        let choice = input.trim();
+        if let Ok(idx) = choice.parse::<usize>() {
+            if idx >= 1 && idx <= options.len() {
+                let (provider, _) = options[idx - 1];
+                println!();
+                match provider {
+                    "anthropic" => configure_anthropic(config).await?,
+                    "openai" => configure_openai(config).await?,
+                    "openrouter" => configure_openrouter(config).await?,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Filter out non-chat models (embeddings, image gen, legacy completions, audio, TTS).
+fn filter_chat_models(models: Vec<String>) -> Vec<String> {
+    /// Prefixes/substrings that indicate non-chat models.
+    const EXCLUDE_PREFIXES: &[&str] = &[
+        "babbage",
+        "davinci",
+        "dall-e",
+        "tts-",
+        "whisper",
+        "text-embedding",
+        "text-moderation",
+        "text-search",
+        "text-similarity",
+        "code-search",
+        "code-davinci",
+        "code-cushman",
+        "ada",
+        "curie",
+        "chatgpt-image",
+        "computer-use",
+    ];
+    models
+        .into_iter()
+        .filter(|m| {
+            let lower = m.to_lowercase();
+            !EXCLUDE_PREFIXES.iter().any(|p| lower.starts_with(p))
+        })
+        .collect()
+}
+
+/// Sort models with popular/recommended ones first.
+fn sort_models_by_relevance(models: &mut [String]) {
+    /// Models in priority order — shown first if present.
+    const PREFERRED: &[&str] = &[
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o4-mini",
+        "o3",
+        "o3-mini",
+        "o1",
+        "o1-mini",
+        "claude-sonnet-4-5-20250514",
+        "claude-3-7-sonnet-20250219",
+        "claude-3-5-sonnet-20241022",
+        "claude-3-5-haiku-20241022",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-2.0-flash",
+    ];
+
+    models.sort_by(|a, b| {
+        let a_idx = PREFERRED.iter().position(|p| a.starts_with(p));
+        let b_idx = PREFERRED.iter().position(|p| b.starts_with(p));
+        match (a_idx, b_idx) {
+            (Some(ai), Some(bi)) => ai.cmp(&bi),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => a.cmp(b),
+        }
+    });
+}
+
+/// Format a numbered model selection menu.
+fn format_model_menu(models: &[String], max_display: usize) -> String {
+    let mut output = String::new();
+    for (i, model) in models.iter().take(max_display).enumerate() {
+        output.push_str(&format!("  {}. {}\n", i + 1, model));
+    }
+    if models.len() > max_display {
+        output.push_str(&format!("  ... ({} more)\n", models.len() - max_display));
+    }
+    output.push_str("  c. Custom (enter model ID)\n");
+    output.push_str("  s. Skip (keep default)\n");
+    output
+}
+
+/// Model selection for a specific provider.
+///
+/// Fetches available models from the given provider, filters and sorts them,
+/// then lets the user pick one.
+async fn configure_model_for_provider(config: &mut Config, provider: &str) -> Result<()> {
+    println!();
+    println!("Model Selection");
+    println!("===============");
+    println!();
+    println!("Fetching available models from {}...", provider);
+
+    let selections = hmanlab::providers::resolve_runtime_providers(config);
+    let selection = selections.iter().find(|s| s.name == provider);
+
+    let models: Vec<String> = if let Some(s) = selection {
+        match super::common::fetch_provider_models(s).await {
+            Ok(m) if !m.is_empty() => m,
+            _ => {
+                println!("  Could not fetch live models, showing known models.");
+                KNOWN_MODELS
+                    .iter()
+                    .filter(|km| km.provider == provider)
+                    .map(|km| km.model.to_string())
+                    .collect()
+            }
+        }
+    } else {
+        KNOWN_MODELS
+            .iter()
+            .filter(|km| km.provider == provider)
+            .map(|km| km.model.to_string())
+            .collect()
+    };
+
+    let mut models = filter_chat_models(models);
+    sort_models_by_relevance(&mut models);
+
+    if models.is_empty() {
+        println!("  No models found for {}. Keeping default.", provider);
+        return Ok(());
+    }
+
+    println!();
+    println!("Which model would you like to use?");
+    print!("{}", format_model_menu(&models, models.len()));
+    println!();
+    print!("Choice [1]: ");
+    io::stdout().flush()?;
+
+    let input = read_line()?;
+    let input = input.trim();
+
+    match input {
+        "" => {
+            config.agents.defaults.model = models[0].clone();
+            println!("  Set model to: {}", models[0]);
+        }
+        "s" | "S" => {
+            println!("  Keeping default model: {}", config.agents.defaults.model);
+        }
+        "c" | "C" => {
+            print!("Enter model ID: ");
+            io::stdout().flush()?;
+            let custom = read_line()?;
+            let custom = custom.trim();
+            if !custom.is_empty() {
+                config.agents.defaults.model = custom.to_string();
+                println!("  Set model to: {}", custom);
+            }
+        }
+        choice => {
+            if let Ok(idx) = choice.parse::<usize>() {
+                if idx >= 1 && idx <= models.len() {
+                    config.agents.defaults.model = models[idx - 1].clone();
+                    println!("  Set model to: {}", models[idx - 1]);
+                } else {
+                    println!("  Invalid choice. Keeping default.");
+                }
+            } else {
+                config.agents.defaults.model = choice.to_string();
+                println!("  Set model to: {}", choice);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Format the express-mode next-steps message.
+fn express_next_steps() -> String {
+    [
+        "",
+        "HmanLab ready!",
+        "",
+        "Try: hmanlab agent -m \"What can you help me with?\"",
+        "Or:  hmanlab agent -m \"Summarize https://news.ycombinator.com\"",
+        "",
+        "Run 'hmanlab onboard --full' for advanced setup (channels, heartbeat, runtime).",
+        "Run 'hmanlab status' to see your configuration.",
+    ]
+    .join("\n")
+}
+
+/// Configure AI personality via SOUL.md.
+fn configure_soul(config: &Config) -> Result<()> {
+    println!();
+    println!("AI Personality Setup");
+    println!("====================");
+    println!("Choose how your AI assistant should behave:");
+    println!("  1. Default (balanced and helpful)");
+    println!("  2. Concise & Direct");
+    println!("  3. Friendly & Warm");
+    println!("  4. Professional & Formal");
+    println!("  5. Creative & Playful");
+    println!("  6. Technical Expert");
+    println!("  7. Custom (write your own)");
+    println!("  8. Skip (decide later per chat)");
+    println!();
+    print!("Choice [1]: ");
+    io::stdout().flush()?;
+
+    let choice = read_line()?;
+    let choice = if choice.is_empty() {
+        "1"
+    } else {
+        choice.trim()
+    };
+
+    let soul_content: Option<String> = match choice {
+        "1" | "default" => None, // no SOUL.md needed for default
+        "2" => Some(persona_switch::PERSONA_PRESETS[1].soul_content.to_string()),
+        "3" => Some(persona_switch::PERSONA_PRESETS[2].soul_content.to_string()),
+        "4" => Some(persona_switch::PERSONA_PRESETS[3].soul_content.to_string()),
+        "5" => Some(persona_switch::PERSONA_PRESETS[4].soul_content.to_string()),
+        "6" => Some(persona_switch::PERSONA_PRESETS[5].soul_content.to_string()),
+        "7" => {
+            println!("Describe how you want your AI to behave:");
+            print!("> ");
+            io::stdout().flush()?;
+            let custom = read_line()?;
+            if custom.is_empty() {
+                None
+            } else {
+                Some(custom)
+            }
+        }
+        _ => {
+            println!("  Skipped. You can set personality per chat with /persona command.");
+            return Ok(());
+        }
+    };
+
+    if let Some(content) = soul_content {
+        let soul_path = config.workspace_path().join("SOUL.md");
+        std::fs::write(&soul_path, &content)?;
+        println!("  Saved personality to {}", soul_path.display());
+        println!("  Edit this file anytime to change your AI's personality.");
+    } else {
+        println!("  Using default personality. Change anytime with /persona command.");
+    }
+
+    Ok(())
+}
+
+/// Initialize configuration directory and save default config.
+///
+/// When `full` is false (default), runs express mode: creates directories
+/// silently, configures the LLM provider, saves, and prints guided next
+/// steps.  When `full` is true, runs the full 10-step interactive wizard.
+pub(crate) async fn cmd_onboard(full: bool) -> Result<()> {
+    // Check for existing OpenClaw installation
+    if let Some(oc_dir) = hmanlab::migrate::detect_openclaw_dir() {
+        println!("Detected OpenClaw installation at: {}", oc_dir.display());
+        println!("Run 'hmanlab migrate' to import your config and skills.");
+        println!();
+    }
+
+    // --- common: create directories ---
+    let config_dir = Config::dir();
+    std::fs::create_dir_all(&config_dir)
+        .with_context(|| format!("Failed to create config directory: {:?}", config_dir))?;
+
+    let workspace_dir = config_dir.join("workspace");
+    std::fs::create_dir_all(&workspace_dir)
+        .with_context(|| format!("Failed to create workspace directory: {:?}", workspace_dir))?;
+
+    let sessions_dir = config_dir.join("sessions");
+    std::fs::create_dir_all(&sessions_dir)
+        .with_context(|| format!("Failed to create sessions directory: {:?}", sessions_dir))?;
+
+    // --- common: load or create config ---
+    let config_path = Config::path();
+    let mut config = if config_path.exists() {
+        Config::load()
+            .with_context(|| format!("Failed to load existing config at {:?}", config_path))?
+    } else {
+        Config::default()
+    };
+
+    if full {
+        // ---------- full 10-step wizard ----------
+        println!("Initializing HmanLab (full wizard)...");
+        println!();
+        println!("  Config directory: {:?}", config_dir);
+        println!("  Workspace directory: {:?}", workspace_dir);
+        println!("  Sessions directory: {:?}", sessions_dir);
+        if config_path.exists() {
+            println!("  Config already exists: {:?}", config_path);
+        } else {
+            println!("  Creating new config: {:?}", config_path);
+        }
+
+        println!();
+        configure_providers(&mut config).await?;
+        configure_soul(&config)?;
+
+        // Configure web search integration
+        configure_web_search(&mut config)?;
+
+        // Configure memory behavior.
+        configure_memory(&mut config)?;
+
+        // Configure WhatsApp + Google Sheets tools.
+        configure_whatsapp_tool(&mut config)?;
+        configure_google_sheets_tool(&mut config)?;
+
+        // Configure heartbeat service.
+        configure_heartbeat(&mut config)?;
+
+        // Configure messaging channels
+        configure_telegram(&mut config)?;
+        configure_whatsapp_channel(&mut config)?;
+        configure_whatsapp_cloud(&mut config)?;
+        configure_discord(&mut config)?;
+        configure_slack(&mut config)?;
+
+        // Configure runtime for shell command isolation
+        configure_runtime(&mut config)?;
+
+        // Save config
+        config
+            .save()
+            .with_context(|| "Failed to save configuration")?;
+
+        println!();
+        println!("HmanLab initialized successfully!");
+        println!();
+        println!("Next steps:");
+        println!("  1. Run 'hmanlab agent' to start the interactive agent");
+        println!("  2. Run 'hmanlab gateway' to start the multi-channel gateway");
+        println!("  3. Run 'hmanlab status' to check your configuration");
+    } else {
+        // ---------- express mode (default) ----------
+        println!("Initializing HmanLab...");
+        println!();
+
+        // Check if Claude CLI credentials are already available (Keychain or ~/.claude.json).
+        // If so, skip the provider setup prompt entirely — zero-config experience.
+        let has_claude_creds = hmanlab::auth::claude_import::read_claude_credentials().is_some();
+        let has_api_key = config
+            .providers
+            .anthropic
+            .as_ref()
+            .and_then(|p| p.api_key.as_ref())
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+
+        if has_claude_creds && !has_api_key {
+            println!("Detected Claude CLI credentials (Keychain / ~/.claude.json).");
+            println!("  These will be used automatically as a fallback provider.");
+            println!("  You can still add an API key later for official access.");
+            println!();
+        } else {
+            configure_providers(&mut config).await?;
+        }
+
+        configure_soul(&config)?;
+
+        // Ask about coding tools
+        println!();
+        print!("Are you using HmanLab as a coding agent? (grep, find tools) [y/N]: ");
+        io::stdout().flush()?;
+        let coding_input = read_line()?.to_ascii_lowercase();
+        if matches!(coding_input.trim(), "y" | "yes") {
+            config.tools.coding_tools = true;
+            println!("  Coding tools (grep, find) enabled.");
+        }
+
+        // Ask about messaging channels
+        println!();
+        println!("Messaging Channels");
+        println!("==================");
+        println!("Connect HmanLab to messaging platforms so you can chat via phone/desktop.");
+        println!("  1. Telegram (recommended — easiest setup)");
+        println!("  2. WhatsApp Web (native, QR code pairing)");
+        println!("  3. WhatsApp Cloud API (official Meta API)");
+        println!("  4. Discord");
+        println!("  5. Slack");
+        println!("  6. Skip (configure later with 'hmanlab channel setup <name>')");
+        println!();
+        print!("Which channels? (comma-separated, e.g. 1,2 or 6 to skip): ");
+        io::stdout().flush()?;
+        let channel_input = read_line()?;
+
+        let mut want_telegram = false;
+        let mut want_whatsapp_web = false;
+        let mut want_whatsapp_cloud = false;
+        let mut want_discord = false;
+        let mut want_slack = false;
+
+        for raw in channel_input.split(',') {
+            match raw.trim() {
+                "1" => want_telegram = true,
+                "2" => want_whatsapp_web = true,
+                "3" => want_whatsapp_cloud = true,
+                "4" => want_discord = true,
+                "5" => want_slack = true,
+                "6" | "" => {}
+                _ => println!("  Unknown option '{}', skipping.", raw.trim()),
+            }
+        }
+
+        if want_telegram {
+            configure_telegram(&mut config)?;
+        }
+        if want_whatsapp_web {
+            if cfg!(feature = "whatsapp-web") {
+                configure_whatsapp_channel(&mut config)?;
+            } else {
+                println!();
+                println!("  WhatsApp Web requires: cargo build --features whatsapp-web");
+                println!("  Skipped.");
+            }
+        }
+        if want_whatsapp_cloud {
+            configure_whatsapp_cloud(&mut config)?;
+        }
+        if want_discord {
+            configure_discord(&mut config)?;
+        }
+        if want_slack {
+            configure_slack(&mut config)?;
+        }
+        if !want_telegram
+            && !want_whatsapp_web
+            && !want_whatsapp_cloud
+            && !want_discord
+            && !want_slack
+        {
+            println!("  Skipped. Run 'hmanlab channel setup <name>' anytime.");
+        }
+
+        // Save config
+        config
+            .save()
+            .with_context(|| "Failed to save configuration")?;
+
+        // Print guided next steps
+        println!("{}", express_next_steps());
+    }
+
+    Ok(())
+}
+
+/// Configure Brave Search API key for web_search tool.
+fn configure_web_search(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Web Search Setup (Brave)");
+    println!("------------------------");
+    println!("Get an API key from: https://brave.com/search/api/");
+    println!();
+    print!("Enter Brave Search API key (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let api_key = read_secret()?;
+    if !api_key.is_empty() {
+        config.tools.web.search.api_key = Some(api_key);
+        println!("  Brave Search API key configured.");
+    } else {
+        println!("  Skipped web search API key setup.");
+    }
+
+    print!(
+        "Default web_search result count [1-10, current={}]: ",
+        config.tools.web.search.max_results
+    );
+    io::stdout().flush()?;
+
+    let count = read_line()?;
+    if !count.is_empty() {
+        if let Ok(parsed) = count.parse::<u32>() {
+            config.tools.web.search.max_results = parsed.clamp(1, 10);
+            println!(
+                "  Default web_search max_results set to {}.",
+                config.tools.web.search.max_results
+            );
+        } else {
+            println!("  Invalid number. Keeping current value.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Configure memory backend and memory tool behavior.
+fn configure_memory(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Memory Setup");
+    println!("------------");
+    println!("Choose memory backend:");
+    println!("  1. Built-in substring search (recommended)");
+    println!("  2. BM25 keyword scoring (requires --features memory-bm25)");
+    println!("  3. Disabled");
+    println!();
+    print!(
+        "Memory backend [current={}]: ",
+        memory_backend_label(&config.memory.backend)
+    );
+    io::stdout().flush()?;
+
+    let backend_choice = read_line()?;
+    if !backend_choice.is_empty() {
+        config.memory.backend = match backend_choice.trim() {
+            "1" | "builtin" => MemoryBackend::Builtin,
+            "2" | "bm25" => MemoryBackend::Bm25,
+            "3" | "none" | "disabled" => MemoryBackend::Disabled,
+            _ => config.memory.backend.clone(),
+        };
+    }
+
+    println!();
+    println!("Memory citation mode:");
+    println!("  1. Auto (CLI on, other channels off)");
+    println!("  2. On");
+    println!("  3. Off");
+    print!(
+        "Citation mode [current={}]: ",
+        memory_citations_label(&config.memory.citations)
+    );
+    io::stdout().flush()?;
+
+    let citations_choice = read_line()?;
+    if !citations_choice.is_empty() {
+        config.memory.citations = match citations_choice.trim() {
+            "1" | "auto" => MemoryCitationsMode::Auto,
+            "2" | "on" => MemoryCitationsMode::On,
+            "3" | "off" => MemoryCitationsMode::Off,
+            _ => config.memory.citations.clone(),
+        };
+    }
+
+    print!(
+        "Include default memory files (MEMORY.md + memory/**/*.md)? [{}]: ",
+        if config.memory.include_default_memory {
+            "Y/n"
+        } else {
+            "y/N"
+        }
+    );
+    io::stdout().flush()?;
+
+    let include_default = read_line()?.to_ascii_lowercase();
+    if !include_default.is_empty() {
+        config.memory.include_default_memory = match include_default.as_str() {
+            "y" | "yes" => true,
+            "n" | "no" => false,
+            _ => config.memory.include_default_memory,
+        };
+    }
+
+    Ok(())
+}
+
+/// Configure WhatsApp Cloud API tool credentials.
+fn configure_whatsapp_tool(config: &mut Config) -> Result<()> {
+    println!();
+    println!("WhatsApp Cloud API Tool Setup");
+    println!("-----------------------------");
+    println!("Get credentials from: https://developers.facebook.com/apps/");
+    print!("Enter WhatsApp Phone Number ID (or press Enter to skip): ");
+    io::stdout().flush()?;
+    let phone_number_id = read_line()?;
+
+    if phone_number_id.is_empty() {
+        println!("  Skipped WhatsApp tool setup.");
+        return Ok(());
+    }
+
+    print!("Enter WhatsApp Access Token: ");
+    io::stdout().flush()?;
+    let access_token = read_secret()?;
+    if access_token.is_empty() {
+        println!("  Missing access token, WhatsApp tool not enabled.");
+        return Ok(());
+    }
+
+    config.tools.whatsapp.phone_number_id = Some(phone_number_id);
+    config.tools.whatsapp.access_token = Some(access_token);
+
+    print!(
+        "Default WhatsApp template language [current={}]: ",
+        config.tools.whatsapp.default_language
+    );
+    io::stdout().flush()?;
+    let lang = read_line()?;
+    if !lang.is_empty() {
+        config.tools.whatsapp.default_language = lang;
+    }
+
+    println!("  WhatsApp tool configured.");
+    Ok(())
+}
+
+/// Configure Google Sheets tool credentials.
+fn configure_google_sheets_tool(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Google Sheets Tool Setup");
+    println!("------------------------");
+    println!("Use either an OAuth access token or a base64 payload containing access_token.");
+    print!("Enter Google Sheets access token (or press Enter to skip): ");
+    io::stdout().flush()?;
+    let access_token = read_secret()?;
+
+    if !access_token.is_empty() {
+        config.tools.google_sheets.access_token = Some(access_token);
+        println!("  Google Sheets access token configured.");
+        return Ok(());
+    }
+
+    print!("Enter base64 credentials payload (optional): ");
+    io::stdout().flush()?;
+    let payload = read_line()?;
+    if !payload.is_empty() {
+        config.tools.google_sheets.service_account_base64 = Some(payload);
+        println!("  Google Sheets base64 payload configured.");
+    } else {
+        println!("  Skipped Google Sheets tool setup.");
+    }
+
+    Ok(())
+}
+
+/// Configure heartbeat settings.
+fn configure_heartbeat(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Heartbeat Service Setup");
+    println!("-----------------------");
+    println!("Heartbeat periodically asks the agent to check HEARTBEAT.md.");
+    print!(
+        "Enable heartbeat service? [{}]: ",
+        if config.heartbeat.enabled {
+            "Y/n"
+        } else {
+            "y/N"
+        }
+    );
+    io::stdout().flush()?;
+    let enabled = read_line()?.to_ascii_lowercase();
+
+    if !enabled.is_empty() {
+        config.heartbeat.enabled = matches!(enabled.as_str(), "y" | "yes");
+    }
+
+    if config.heartbeat.enabled {
+        print!(
+            "Heartbeat interval in minutes [current={}]: ",
+            config.heartbeat.interval_secs / 60
+        );
+        io::stdout().flush()?;
+        let minutes = read_line()?;
+        if !minutes.is_empty() {
+            if let Ok(parsed) = minutes.parse::<u64>() {
+                config.heartbeat.interval_secs = (parsed.max(1)) * 60;
+            }
+        }
+        println!("  Heartbeat enabled.");
+    } else {
+        println!("  Heartbeat disabled.");
+    }
+
+    Ok(())
+}
+
+/// Configure Anthropic provider.
+async fn configure_anthropic(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Anthropic (Claude) Setup");
+    println!("------------------------");
+    println!("How would you like to authenticate?");
+    println!("  1. API key (from https://console.anthropic.com/)");
+    println!("  2. Claude Code subscription token (Pro/Max plan)");
+    println!("  3. Skip");
+    println!();
+    print!("Choice [1]: ");
+    io::stdout().flush()?;
+
+    let choice = read_line()?;
+    let choice = if choice.is_empty() {
+        "1"
+    } else {
+        choice.trim()
+    };
+
+    match choice {
+        "1" => {
+            print!("Enter Anthropic API key: ");
+            io::stdout().flush()?;
+            let api_key = read_secret()?;
+            if !api_key.is_empty() {
+                print!("  Validating API key...");
+                io::stdout().flush()?;
+                match super::common::validate_api_key("anthropic", &api_key, None).await {
+                    Ok(super::common::KeyValidation::Valid) => println!(" valid!"),
+                    Ok(super::common::KeyValidation::RateLimited) => println!(
+                        " valid! (key recognized, but the account is currently rate-limited or out of quota)"
+                    ),
+                    Err(e) => {
+                        println!(" failed.");
+                        println!("  Warning: {}", e);
+                        println!("  Saving anyway -- you can fix this later.");
+                    }
+                }
+                let provider_config = config
+                    .providers
+                    .anthropic
+                    .get_or_insert_with(Default::default);
+                provider_config.api_key = Some(api_key);
+                config.agents.defaults.model = "claude-sonnet-4-6".to_string();
+                println!("  Anthropic API key configured.");
+                println!("  Default model set to: claude-sonnet-4-6");
+            } else {
+                println!("  No key entered. Skipped Anthropic configuration.");
+            }
+        }
+        "2" => {
+            configure_anthropic_subscription_token(config)?;
+        }
+        "3" | "" => {
+            println!("  Skipped Anthropic configuration.");
+        }
+        _ => {
+            println!("  Invalid choice. Skipped Anthropic configuration.");
+        }
+    }
+
+    Ok(())
+}
+
+/// Paste Claude Code subscription tokens during onboard.
+fn configure_anthropic_subscription_token(config: &mut Config) -> Result<()> {
+    println!();
+    println!("In Claude Code CLI, run: claude auth token");
+    println!("Then paste the tokens below.");
+    println!();
+    println!("WARNING: Using subscription tokens for API access may violate");
+    println!("Anthropic's Terms of Service. Tokens may be revoked at any time.");
+    println!();
+
+    print!("Access token: ");
+    io::stdout().flush()?;
+    let access_token = read_secret()?;
+    if access_token.is_empty() {
+        println!("  No access token provided. Skipped.");
+        return Ok(());
+    }
+
+    print!("Refresh token (optional, press Enter to skip): ");
+    io::stdout().flush()?;
+    let refresh_token = read_secret()?;
+    let refresh_token = if refresh_token.is_empty() {
+        None
+    } else {
+        Some(refresh_token)
+    };
+
+    let now = chrono::Utc::now().timestamp();
+    let tokens = hmanlab::auth::OAuthTokenSet {
+        provider: "anthropic".to_string(),
+        access_token,
+        refresh_token,
+        expires_at: None,
+        token_type: "Bearer".to_string(),
+        scope: None,
+        obtained_at: now,
+        client_id: Some(hmanlab::auth::CLAUDE_CODE_CLIENT_ID.to_string()),
+    };
+
+    let encryption = hmanlab::security::encryption::resolve_master_key(true)
+        .map_err(|e| anyhow::anyhow!("Cannot store tokens without encryption key: {}", e))?;
+    let store = hmanlab::auth::store::TokenStore::new(encryption);
+    store
+        .save(&tokens)
+        .map_err(|e| anyhow::anyhow!("Failed to save tokens: {}", e))?;
+
+    let provider_config = config
+        .providers
+        .anthropic
+        .get_or_insert_with(Default::default);
+    provider_config.auth_method = Some("auto".to_string());
+    config.agents.defaults.model = "claude-sonnet-4-6".to_string();
+
+    println!("  Subscription token stored and encrypted.");
+    println!("  Auth method set to \"auto\" (OAuth first, API key fallback).");
+    println!("  Default model set to: claude-sonnet-4-6");
+
+    Ok(())
+}
+
+/// Configure OpenAI provider.
+async fn configure_openai(config: &mut Config) -> Result<()> {
+    println!();
+    println!("OpenAI Setup");
+    println!("------------");
+    println!("Get your API key from: https://platform.openai.com/api-keys");
+    println!();
+    print!("Enter OpenAI API key (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let api_key = read_secret()?;
+
+    if !api_key.is_empty() {
+        print!("  Validating API key...");
+        io::stdout().flush()?;
+        // Use custom base URL for validation if one was previously configured
+        let existing_base = config
+            .providers
+            .openai
+            .as_ref()
+            .and_then(|p| p.api_base.as_deref());
+        match super::common::validate_api_key("openai", &api_key, existing_base).await {
+            Ok(super::common::KeyValidation::Valid) => println!(" valid!"),
+            Ok(super::common::KeyValidation::RateLimited) => println!(
+                " valid! (key recognized, but the account is currently rate-limited or out of quota)"
+            ),
+            Err(e) => {
+                println!(" failed.");
+                println!("  Warning: {}", e);
+                println!("  Saving anyway -- you can fix this later.");
+            }
+        }
+        let provider_config = config.providers.openai.get_or_insert_with(Default::default);
+        provider_config.api_key = Some(api_key);
+        // Set OpenAI model as default when OpenAI is configured (and Anthropic isn't)
+        if config
+            .providers
+            .anthropic
+            .as_ref()
+            .and_then(|p| p.api_key.as_ref())
+            .map(|k| k.is_empty())
+            .unwrap_or(true)
+        {
+            config.agents.defaults.model = "gpt-5.1".to_string();
+            println!("  Default model set to: gpt-5.1");
+        }
+        println!("  OpenAI API key configured.");
+
+        // Ask about custom base URL
+        println!();
+        println!("Do you want to use a custom API base URL?");
+        println!("(For Azure OpenAI, local models, or OpenAI-compatible APIs)");
+        print!("Enter custom base URL (or press Enter for default): ");
+        io::stdout().flush()?;
+
+        let base_url = read_line()?;
+        if !base_url.is_empty() {
+            provider_config.api_base = Some(base_url);
+            println!("  Custom base URL configured.");
+        }
+    } else {
+        println!("  Skipped OpenAI configuration.");
+    }
+
+    Ok(())
+}
+
+/// Configure OpenRouter provider.
+async fn configure_openrouter(config: &mut Config) -> Result<()> {
+    println!();
+    println!("OpenRouter Setup");
+    println!("----------------");
+    println!("Get your API key from: https://openrouter.ai/settings/keys");
+    println!("OpenRouter provides access to 400+ models via a single API key.");
+    println!();
+    print!("Enter OpenRouter API key (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let api_key = read_secret()?;
+
+    if !api_key.is_empty() {
+        print!("  Validating API key...");
+        io::stdout().flush()?;
+        let existing_base = config
+            .providers
+            .openrouter
+            .as_ref()
+            .and_then(|p| p.api_base.as_deref());
+        match super::common::validate_api_key("openrouter", &api_key, existing_base).await {
+            Ok(super::common::KeyValidation::Valid) => println!(" valid!"),
+            Ok(super::common::KeyValidation::RateLimited) => println!(
+                " valid! (key recognized, but the account is currently rate-limited or out of quota)"
+            ),
+            Err(e) => {
+                println!(" failed.");
+                println!("  Warning: {}", e);
+                println!("  Saving anyway -- you can fix this later.");
+            }
+        }
+        let provider_config = config
+            .providers
+            .openrouter
+            .get_or_insert_with(Default::default);
+        provider_config.api_key = Some(api_key);
+        // Set openrouter/auto as default model only when OpenRouter is the sole provider.
+        let configured_providers = configured_provider_names(config);
+        if configured_providers.len() == 1 && configured_providers[0] == "openrouter" {
+            config.agents.defaults.model = "openrouter/auto".to_string();
+            println!("  Default model set to: openrouter/auto");
+        }
+        println!("  OpenRouter API key configured.");
+    } else {
+        println!("  Skipped OpenRouter configuration.");
+    }
+
+    Ok(())
+}
+
+/// Configure Telegram channel.
+fn configure_telegram(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Telegram Bot Setup");
+    println!("------------------");
+    println!("To create a bot: Open Telegram, message @BotFather, send /newbot");
+    println!();
+    print!("Enter Telegram bot token (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let token = read_secret()?;
+
+    if !token.is_empty() {
+        let telegram_config = config
+            .channels
+            .telegram
+            .get_or_insert_with(Default::default);
+        telegram_config.token = token;
+        telegram_config.enabled = true;
+        println!("  Telegram bot configured.");
+        println!("  Run 'hmanlab gateway' to start the bot.");
+    } else {
+        println!("  Skipped Telegram configuration.");
+    }
+
+    Ok(())
+}
+
+/// Configure WhatsApp Web channel (native, via wa-rs).
+fn configure_whatsapp_channel(config: &mut Config) -> Result<()> {
+    if !cfg!(feature = "whatsapp-web") {
+        anyhow::bail!(
+            "WhatsApp Web support is not available in this build. Rebuild with --features whatsapp-web."
+        );
+    }
+
+    println!();
+    println!("WhatsApp Web Channel Setup");
+    println!("--------------------------");
+
+    let whatsapp_config = config
+        .channels
+        .whatsapp_web
+        .get_or_insert_with(Default::default);
+    whatsapp_config.enabled = true;
+
+    print!("Phone number allowlist (comma-separated E.164, e.g. +60123456789, or Enter for all): ");
+    io::stdout().flush()?;
+    let allowlist = read_line()?;
+    whatsapp_config.allow_from = allowlist
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if whatsapp_config.allow_from.is_empty() {
+        print!("Deny all senders by default (strict mode)? [y/N]: ");
+        io::stdout().flush()?;
+        let deny = read_line()?.to_ascii_lowercase();
+        if matches!(deny.as_str(), "y" | "yes") {
+            whatsapp_config.deny_by_default = true;
+            println!("  Strict mode enabled — no messages will be accepted until you add allowed numbers.");
+        }
+    }
+
+    println!();
+    println!("  WhatsApp Web channel enabled.");
+    println!("  Run 'hmanlab gateway' to pair via QR code.");
+    println!("  On first run, scan the QR code with your phone:");
+    println!("    WhatsApp → Settings → Linked Devices → Link a Device");
+    Ok(())
+}
+
+/// Configure WhatsApp Cloud API channel (official Meta API).
+fn configure_whatsapp_cloud(config: &mut Config) -> Result<()> {
+    println!();
+    println!("WhatsApp Cloud API Setup (Official)");
+    println!("-----------------------------------");
+    println!("Uses Meta's official Cloud API. Requires a Meta Business account.");
+    println!("  1. Go to https://developers.facebook.com → Create App → Business");
+    println!("  2. Add WhatsApp product → API Setup");
+    println!("  3. Copy Phone Number ID and generate a permanent access token");
+    println!("  4. Set up a webhook URL (use 'hmanlab gateway --tunnel auto')");
+    println!();
+    print!("Enter Phone Number ID (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let phone_id = read_line()?;
+    if phone_id.is_empty() {
+        println!("  Skipped WhatsApp Cloud API configuration.");
+        return Ok(());
+    }
+
+    print!("Enter permanent access token: ");
+    io::stdout().flush()?;
+    let token = read_secret()?;
+
+    print!("Choose a webhook verify token (any secret string): ");
+    io::stdout().flush()?;
+    let verify_token = read_secret()?;
+
+    let wc = config
+        .channels
+        .whatsapp_cloud
+        .get_or_insert_with(Default::default);
+    wc.phone_number_id = phone_id;
+    wc.access_token = token;
+    wc.webhook_verify_token = verify_token;
+    wc.enabled = true;
+
+    println!("  WhatsApp Cloud API configured.");
+    println!(
+        "  Webhook endpoint: {}:{}{}",
+        wc.bind_address, wc.port, wc.path
+    );
+    println!("  Run 'hmanlab gateway' to start, then configure the webhook URL in Meta dashboard.");
+    Ok(())
+}
+
+/// Configure Discord channel.
+fn configure_discord(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Discord Bot Setup");
+    println!("-----------------");
+    println!("To create a bot:");
+    println!("  1. Go to https://discord.com/developers/applications");
+    println!("  2. Create New Application → Bot → Reset Token → copy it");
+    println!("  3. Enable MESSAGE CONTENT intent under Bot → Privileged Intents");
+    println!(
+        "  4. Invite bot to your server with OAuth2 URL Generator (bot scope + Send Messages)"
+    );
+    println!();
+    print!("Enter Discord bot token (or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let token = read_secret()?;
+
+    if !token.is_empty() {
+        let discord_config = config.channels.discord.get_or_insert_with(Default::default);
+        discord_config.token = token;
+        discord_config.enabled = true;
+        println!("  Discord bot configured.");
+        println!("  Run 'hmanlab gateway' to start the bot.");
+    } else {
+        println!("  Skipped Discord configuration.");
+    }
+
+    Ok(())
+}
+
+/// Configure Slack channel.
+fn configure_slack(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Slack Bot Setup");
+    println!("---------------");
+    println!("To create a bot:");
+    println!("  1. Go to https://api.slack.com/apps → Create New App");
+    println!("  2. Add Bot Token Scopes: chat:write, app_mentions:read");
+    println!("  3. Install to Workspace → copy Bot User OAuth Token (xoxb-...)");
+    println!(
+        "  4. Under Basic Information → App-Level Tokens → generate with connections:write scope"
+    );
+    println!();
+    print!("Enter Slack bot token (xoxb-..., or press Enter to skip): ");
+    io::stdout().flush()?;
+
+    let bot_token = read_secret()?;
+
+    if bot_token.is_empty() {
+        println!("  Skipped Slack configuration.");
+        return Ok(());
+    }
+
+    print!("Enter Slack app-level token (xapp-...): ");
+    io::stdout().flush()?;
+    let app_token = read_secret()?;
+
+    let slack_config = config.channels.slack.get_or_insert_with(Default::default);
+    slack_config.bot_token = bot_token;
+    slack_config.app_token = app_token;
+    slack_config.enabled = true;
+    println!("  Slack bot configured.");
+    println!("  Run 'hmanlab gateway' to start the bot.");
+
+    Ok(())
+}
+
+/// Configure runtime for shell command isolation.
+fn configure_runtime(config: &mut Config) -> Result<()> {
+    println!();
+    println!("=== Runtime Configuration ===");
+    println!("Choose container runtime for shell command isolation:");
+    println!("  1. Native (no container, uses application-level security)");
+    println!("  2. Docker (requires Docker installed)");
+    #[cfg(target_os = "macos")]
+    println!("  3. Apple Container (macOS 15+ only)");
+    println!();
+
+    loop {
+        print!("Enter choice [1]: ");
+        io::stdout().flush()?;
+
+        let choice = read_line()?.trim().to_string();
+        let choice = if choice.is_empty() { "1" } else { &choice };
+
+        match choice {
+            "1" => {
+                config.runtime.runtime_type = RuntimeType::Native;
+                config.runtime.allow_fallback_to_native = false;
+                println!("Configured: Native runtime (no container isolation)");
+                break;
+            }
+            "2" => {
+                config.runtime.runtime_type = RuntimeType::Docker;
+                print!("Docker image [alpine:latest]: ");
+                io::stdout().flush()?;
+                let image = read_line()?.trim().to_string();
+                if !image.is_empty() {
+                    config.runtime.docker.image = image;
+                }
+                println!(
+                    "Configured: Docker runtime with image {}",
+                    config.runtime.docker.image
+                );
+
+                print!("Allow fallback to native if Docker is unavailable? [y/N]: ");
+                io::stdout().flush()?;
+                let fallback = read_line()?.trim().to_lowercase();
+                config.runtime.allow_fallback_to_native = matches!(fallback.as_str(), "y" | "yes");
+                if config.runtime.allow_fallback_to_native {
+                    println!(
+                        "Fallback enabled: native runtime will be used if Docker is unavailable."
+                    );
+                } else {
+                    println!("Fallback disabled: startup will fail if Docker is unavailable.");
+                }
+                break;
+            }
+            #[cfg(target_os = "macos")]
+            "3" => {
+                config.runtime.runtime_type = RuntimeType::AppleContainer;
+                println!("Configured: Apple Container runtime");
+
+                print!("Allow fallback to native if Apple Container is unavailable? [y/N]: ");
+                io::stdout().flush()?;
+                let fallback = read_line()?.trim().to_lowercase();
+                config.runtime.allow_fallback_to_native = matches!(fallback.as_str(), "y" | "yes");
+                if config.runtime.allow_fallback_to_native {
+                    println!(
+                        "Fallback enabled: native runtime will be used if Apple Container is unavailable."
+                    );
+                } else {
+                    println!(
+                        "Fallback disabled: startup will fail if Apple Container is unavailable."
+                    );
+                }
+                break;
+            }
+            _ => {
+                println!("Invalid choice. Please try again.");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_express_next_steps_message() {
+        let msg = express_next_steps();
+        assert!(msg.contains("HmanLab ready!"));
+        assert!(msg.contains("hmanlab agent -m"));
+        assert!(msg.contains("hmanlab onboard --full"));
+        assert!(msg.contains("hmanlab status"));
+        assert!(msg.contains("Summarize https://news.ycombinator.com"));
+    }
+
+    #[test]
+    fn test_format_model_menu_with_known_models() {
+        let models = vec![
+            "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
+            "gpt-5.4-nano".to_string(),
+        ];
+        let menu = format_model_menu(&models, 10);
+        assert!(menu.contains("1."));
+        assert!(menu.contains("gpt-5.4"));
+        assert!(menu.contains("c."));
+        assert!(menu.contains("s."));
+    }
+
+    #[test]
+    fn test_format_model_menu_truncates_at_max() {
+        let models: Vec<String> = (0..20).map(|i| format!("model-{}", i)).collect();
+        let menu = format_model_menu(&models, 5);
+        assert!(menu.contains("5."));
+        assert!(!menu.contains("6."));
+        assert!(menu.contains("15 more"));
+    }
+
+    #[test]
+    fn test_filter_chat_models_removes_non_chat() {
+        let models = vec![
+            "gpt-4o".to_string(),
+            "gpt-4o-mini".to_string(),
+            "babbage-002".to_string(),
+            "dall-e-3".to_string(),
+            "davinci-002".to_string(),
+            "text-embedding-3-small".to_string(),
+            "tts-1".to_string(),
+            "whisper-1".to_string(),
+            "chatgpt-image-latest".to_string(),
+            "computer-use-preview".to_string(),
+            "o3-mini".to_string(),
+        ];
+        let filtered = filter_chat_models(models);
+        assert_eq!(filtered, vec!["gpt-4o", "gpt-4o-mini", "o3-mini"]);
+    }
+
+    #[test]
+    fn test_filter_chat_models_keeps_all_chat() {
+        let models = vec![
+            "gpt-4o".to_string(),
+            "claude-3-5-sonnet".to_string(),
+            "o1-mini".to_string(),
+        ];
+        let filtered = filter_chat_models(models);
+        assert_eq!(filtered.len(), 3);
+    }
+
+    #[test]
+    fn test_sort_models_preferred_first() {
+        let mut models = vec![
+            "gpt-3.5-turbo".to_string(),
+            "gpt-4o".to_string(),
+            "o3-mini".to_string(),
+            "gpt-4.1".to_string(),
+            "gpt-4o-mini".to_string(),
+        ];
+        sort_models_by_relevance(&mut models);
+        assert_eq!(models[0], "gpt-4.1");
+        assert_eq!(models[1], "gpt-4o");
+        assert_eq!(models[2], "gpt-4o-mini");
+        assert_eq!(models[3], "o3-mini");
+        assert_eq!(models[4], "gpt-3.5-turbo");
+    }
+}

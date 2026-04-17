@@ -1,0 +1,2359 @@
+//! Configuration management for HmanLab
+//!
+//! This module provides configuration loading, saving, and global state management.
+//! Configuration is loaded from `~/.hmanlab/config.json` with environment variable overrides.
+
+pub mod templates;
+mod types;
+pub mod validate;
+pub mod watcher;
+
+pub use types::*;
+
+use crate::error::{Result, ZeptoError};
+use once_cell::sync::OnceCell;
+use std::io::IsTerminal;
+use std::path::PathBuf;
+use std::sync::RwLock;
+
+/// Global configuration instance
+static CONFIG: OnceCell<RwLock<Config>> = OnceCell::new();
+
+impl Config {
+    /// Returns the HmanLab configuration directory path (~/.hmanlab)
+    pub fn dir() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".hmanlab")
+    }
+
+    /// Returns the path to the config file (~/.hmanlab/config.json)
+    pub fn path() -> PathBuf {
+        Self::dir().join("config.json")
+    }
+
+    /// Load configuration from the default path with environment overrides.
+    ///
+    /// If the config file doesn't exist, returns default configuration.
+    /// Environment variables can override config values using the pattern:
+    /// `HMANLAB_SECTION_SUBSECTION_KEY`
+    pub fn load() -> Result<Self> {
+        Self::load_from_path(&Self::path())
+    }
+
+    /// Load configuration from a specific path with environment overrides.
+    ///
+    /// If the config file contains `ENC[...]` encrypted values, they are
+    /// transparently decrypted before the JSON is deserialized into `Config`.
+    /// The master key is resolved via `HMANLAB_MASTER_KEY` env var or, when
+    /// running in an interactive terminal, an interactive passphrase prompt.
+    pub fn load_from_path(path: &PathBuf) -> Result<Self> {
+        let mut config = if path.exists() {
+            let content = std::fs::read_to_string(path)?;
+            let mut raw: serde_json::Value = serde_json::from_str(&content)?;
+
+            // Decrypt ENC[...] values if present
+            if has_encrypted_values(&raw) {
+                let interactive = std::io::stdin().is_terminal();
+                let enc = crate::security::encryption::resolve_master_key(interactive)?;
+                decrypt_config_values(&mut raw, &enc)?;
+            }
+
+            serde_json::from_value(raw)?
+        } else {
+            Config::default()
+        };
+
+        // Apply environment variable overrides
+        config.apply_env_overrides();
+
+        Ok(config)
+    }
+
+    /// Reload this config instance from the default path.
+    pub fn reload(&mut self) -> Result<()> {
+        *self = Self::load()?;
+        Ok(())
+    }
+
+    /// Reload this config instance from a specific path.
+    pub fn reload_from_path(&mut self, path: &PathBuf) -> Result<()> {
+        *self = Self::load_from_path(path)?;
+        Ok(())
+    }
+
+    /// Apply environment variable overrides to the configuration.
+    ///
+    /// Environment variables follow the pattern: HMANLAB_SECTION_SUBSECTION_KEY
+    fn apply_env_overrides(&mut self) {
+        // Agent defaults
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_WORKSPACE") {
+            self.agents.defaults.workspace = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MODEL") {
+            self.agents.defaults.model = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MAX_TOKENS") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.max_tokens = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_TEMPERATURE") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.temperature = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.max_tool_iterations = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_AGENT_TIMEOUT_SECS") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.agent_timeout_secs = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_TOOL_TIMEOUT_SECS") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.tool_timeout_secs = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_TOKEN_BUDGET") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.token_budget = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MESSAGE_QUEUE_MODE") {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "collect" => self.agents.defaults.message_queue_mode = MessageQueueMode::Collect,
+                "followup" => self.agents.defaults.message_queue_mode = MessageQueueMode::Followup,
+                _ => {}
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_COMPACT_TOOLS") {
+            self.agents.defaults.compact_tools = val == "true" || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_TOOL_PROFILE") {
+            self.agents.defaults.tool_profile = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_ACTIVE_HAND") {
+            self.agents.defaults.active_hand = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_SYSTEM_PROMPT") {
+            self.agents.defaults.system_prompt = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_TIMEZONE") {
+            self.agents.defaults.timezone = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_ENABLED") {
+            self.agents.defaults.loop_guard.enabled = val == "true" || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WARN_THRESHOLD") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.warn_threshold = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_BLOCK_THRESHOLD") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.block_threshold = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_GLOBAL_CIRCUIT_BREAKER")
+        {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.global_circuit_breaker = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_PING_PONG_MIN_REPEATS") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.ping_pong_min_repeats = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_POLL_MULTIPLIER") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.poll_multiplier = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_WARN_THRESHOLD")
+        {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.outcome_warn_threshold = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_BLOCK_THRESHOLD")
+        {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.outcome_block_threshold = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WINDOW_SIZE") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.loop_guard.window_size = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MAX_TOOL_RESULT_BYTES") {
+            if let Ok(v) = val.parse() {
+                self.agents.defaults.max_tool_result_bytes = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_AGENTS_DEFAULTS_MAX_TOOL_CALLS") {
+            if let Ok(v) = val.parse::<u32>() {
+                self.agents.defaults.max_tool_calls = Some(v);
+            }
+        }
+
+        // Gateway
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_HOST") {
+            self.gateway.host = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_PORT") {
+            if let Ok(v) = val.parse() {
+                self.gateway.port = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_RATE_LIMIT_PAIR_PER_MIN") {
+            if let Ok(n) = val.parse() {
+                self.gateway.rate_limit.pair_per_min = n;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_RATE_LIMIT_WEBHOOK_PER_MIN") {
+            if let Ok(n) = val.parse() {
+                self.gateway.rate_limit.webhook_per_min = n;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_STARTUP_GUARD_ENABLED") {
+            self.gateway.startup_guard.enabled = val.parse().unwrap_or(true);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_STARTUP_GUARD_CRASH_THRESHOLD") {
+            if let Ok(n) = val.parse() {
+                self.gateway.startup_guard.crash_threshold = n;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_GATEWAY_STARTUP_GUARD_WINDOW_SECS") {
+            if let Ok(n) = val.parse() {
+                self.gateway.startup_guard.window_secs = n;
+            }
+        }
+
+        // Provider API keys
+        self.apply_provider_env_overrides();
+
+        // Channel overrides
+        self.apply_channel_env_overrides();
+
+        // Memory-specific overrides
+        self.apply_memory_env_overrides();
+
+        // Heartbeat-specific overrides
+        self.apply_heartbeat_env_overrides();
+
+        // Skills-specific overrides
+        self.apply_skills_env_overrides();
+
+        // Tool-specific overrides
+        self.apply_tool_env_overrides();
+
+        // Hooks
+        if let Ok(val) = std::env::var("HMANLAB_HOOKS_ENABLED") {
+            self.hooks.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+
+        // Safety layer
+        self.apply_safety_env_overrides();
+
+        // Context compaction
+        self.apply_compaction_env_overrides();
+
+        // Routines
+        self.apply_routines_env_overrides();
+
+        // Stripe
+        self.apply_stripe_env_overrides();
+
+        // Project management tool
+        self.apply_project_env_overrides();
+
+        // Cache
+        self.apply_cache_env_overrides();
+
+        // Agent mode
+        if let Ok(val) = std::env::var("HMANLAB_SECURITY_AGENT_MODE") {
+            self.agent_mode.mode = val;
+        }
+
+        // Device pairing
+        self.apply_pairing_env_overrides();
+
+        // Session
+        if let Ok(val) = std::env::var("HMANLAB_SESSION_AUTO_REPAIR") {
+            self.session.auto_repair = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+
+        // Transcription
+        if let Ok(val) = std::env::var("HMANLAB_TRANSCRIPTION_MODEL") {
+            self.transcription.model = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_TRANSCRIPTION_ENABLED") {
+            self.transcription.enabled = val == "true" || val == "1";
+        }
+
+        // Panel (env overrides always applied — PanelConfig is always present in Config)
+        if let Ok(val) = std::env::var("HMANLAB_PANEL_ENABLED") {
+            self.panel.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PANEL_PORT") {
+            if let Ok(v) = val.parse() {
+                self.panel.port = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PANEL_API_PORT") {
+            if let Ok(v) = val.parse() {
+                self.panel.api_port = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PANEL_BIND") {
+            self.panel.bind = val;
+        }
+    }
+
+    /// Apply provider-specific environment variable overrides
+    fn apply_provider_env_overrides(&mut self) {
+        // Anthropic
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_API_KEY") {
+            let provider = self
+                .providers
+                .anthropic
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_API_BASE") {
+            let provider = self
+                .providers
+                .anthropic
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // OpenAI
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_API_KEY") {
+            let provider = self
+                .providers
+                .openai
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_API_BASE") {
+            let provider = self
+                .providers
+                .openai
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // OpenRouter
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENROUTER_API_KEY") {
+            let provider = self
+                .providers
+                .openrouter
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENROUTER_API_BASE") {
+            let provider = self
+                .providers
+                .openrouter
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Groq
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GROQ_API_KEY") {
+            let provider = self
+                .providers
+                .groq
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+
+        // Zhipu
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ZHIPU_API_KEY") {
+            let provider = self
+                .providers
+                .zhipu
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ZHIPU_API_BASE") {
+            let provider = self
+                .providers
+                .zhipu
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Groq api_base override
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GROQ_API_BASE") {
+            let provider = self
+                .providers
+                .groq
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Gemini
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GEMINI_API_KEY") {
+            let provider = self
+                .providers
+                .gemini
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GEMINI_API_BASE") {
+            let provider = self
+                .providers
+                .gemini
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Vertex AI (api_key = project ID, api_base = location)
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VERTEX_API_KEY") {
+            let provider = self
+                .providers
+                .vertex
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VERTEX_API_BASE") {
+            let provider = self
+                .providers
+                .vertex
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // vLLM
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VLLM_API_KEY") {
+            let provider = self
+                .providers
+                .vllm
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VLLM_API_BASE") {
+            let provider = self
+                .providers
+                .vllm
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Ollama (local models)
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OLLAMA_API_KEY") {
+            let provider = self
+                .providers
+                .ollama
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OLLAMA_API_BASE") {
+            let provider = self
+                .providers
+                .ollama
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Nvidia NIM
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NVIDIA_API_KEY") {
+            let provider = self
+                .providers
+                .nvidia
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NVIDIA_API_BASE") {
+            let provider = self
+                .providers
+                .nvidia
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // DeepSeek
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_DEEPSEEK_API_KEY") {
+            let provider = self
+                .providers
+                .deepseek
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_DEEPSEEK_API_BASE") {
+            let provider = self
+                .providers
+                .deepseek
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Kimi (Moonshot AI)
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_KIMI_API_KEY") {
+            let provider = self
+                .providers
+                .kimi
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_KIMI_API_BASE") {
+            let provider = self
+                .providers
+                .kimi
+                .get_or_insert_with(ProviderConfig::default);
+            provider.api_base = Some(val);
+        }
+
+        // Azure OpenAI
+        if let Ok(v) = std::env::var("HMANLAB_PROVIDERS_AZURE_API_KEY")
+            .or_else(|_| std::env::var("AZURE_OPENAI_API_KEY"))
+        {
+            self.providers
+                .azure
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(v);
+        }
+        if let Ok(v) = std::env::var("HMANLAB_PROVIDERS_AZURE_API_BASE")
+            .or_else(|_| std::env::var("AZURE_OPENAI_ENDPOINT"))
+        {
+            self.providers
+                .azure
+                .get_or_insert_with(ProviderConfig::default)
+                .api_base = Some(v);
+        }
+        if let Ok(v) = std::env::var("HMANLAB_PROVIDERS_AZURE_API_VERSION") {
+            self.providers
+                .azure
+                .get_or_insert_with(ProviderConfig::default)
+                .api_version = Some(v);
+        }
+
+        // Amazon Bedrock
+        if let Ok(v) = std::env::var("HMANLAB_PROVIDERS_BEDROCK_API_KEY") {
+            self.providers
+                .bedrock
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(v);
+        } else if self.providers.bedrock.is_some() {
+            if let Ok(v) = std::env::var("AWS_ACCESS_KEY_ID") {
+                // Only apply AWS_ACCESS_KEY_ID if Bedrock was already explicitly configured
+                self.providers
+                    .bedrock
+                    .get_or_insert_with(ProviderConfig::default)
+                    .api_key = Some(v);
+            }
+        }
+        if let Ok(v) = std::env::var("HMANLAB_PROVIDERS_BEDROCK_API_BASE") {
+            self.providers
+                .bedrock
+                .get_or_insert_with(ProviderConfig::default)
+                .api_base = Some(v);
+        }
+
+        // xAI (Grok)
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_XAI_API_KEY") {
+            self.providers
+                .xai
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(val);
+        } else if let Ok(val) = std::env::var("XAI_API_KEY") {
+            self.providers
+                .xai
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_XAI_API_BASE") {
+            self.providers
+                .xai
+                .get_or_insert_with(ProviderConfig::default)
+                .api_base = Some(val);
+        }
+
+        // Baidu Qianfan
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_QIANFAN_API_KEY") {
+            self.providers
+                .qianfan
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(val);
+        } else if let Ok(val) = std::env::var("QIANFAN_API_KEY") {
+            self.providers
+                .qianfan
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_QIANFAN_API_BASE") {
+            self.providers
+                .qianfan
+                .get_or_insert_with(ProviderConfig::default)
+                .api_base = Some(val);
+        }
+
+        // Novita AI
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NOVITA_API_KEY")
+            .or_else(|_| std::env::var("NOVITA_API_KEY"))
+        {
+            self.providers
+                .novita
+                .get_or_insert_with(ProviderConfig::default)
+                .api_key = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NOVITA_API_BASE") {
+            self.providers
+                .novita
+                .get_or_insert_with(ProviderConfig::default)
+                .api_base = Some(val);
+        }
+
+        // Per-provider model overrides
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_MODEL") {
+            self.providers
+                .anthropic
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_MODEL") {
+            self.providers
+                .openai
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GEMINI_MODEL") {
+            self.providers
+                .gemini
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VERTEX_MODEL") {
+            self.providers
+                .vertex
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NVIDIA_MODEL") {
+            self.providers
+                .nvidia
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENROUTER_MODEL") {
+            self.providers
+                .openrouter
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_GROQ_MODEL") {
+            self.providers
+                .groq
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OLLAMA_MODEL") {
+            self.providers
+                .ollama
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_VLLM_MODEL") {
+            self.providers
+                .vllm
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ZHIPU_MODEL") {
+            self.providers
+                .zhipu
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_DEEPSEEK_MODEL") {
+            self.providers
+                .deepseek
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_KIMI_MODEL") {
+            self.providers
+                .kimi
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_XAI_MODEL") {
+            self.providers
+                .xai
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_QIANFAN_MODEL") {
+            self.providers
+                .qianfan
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_NOVITA_MODEL") {
+            self.providers
+                .novita
+                .get_or_insert_with(ProviderConfig::default)
+                .model = Some(val);
+        }
+
+        // Provider retry behavior
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_RETRY_ENABLED") {
+            if let Ok(enabled) = val.parse() {
+                self.providers.retry.enabled = enabled;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_RETRY_MAX_RETRIES") {
+            if let Ok(v) = val.parse() {
+                self.providers.retry.max_retries = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_RETRY_BASE_DELAY_MS") {
+            if let Ok(v) = val.parse() {
+                self.providers.retry.base_delay_ms = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_RETRY_MAX_DELAY_MS") {
+            if let Ok(v) = val.parse() {
+                self.providers.retry.max_delay_ms = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_RETRY_BUDGET_MS") {
+            if let Ok(v) = val.parse() {
+                self.providers.retry.retry_budget_ms = v;
+            }
+        }
+
+        // Provider fallback behavior
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_FALLBACK_ENABLED") {
+            if let Ok(enabled) = val.parse() {
+                self.providers.fallback.enabled = enabled;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_FALLBACK_PROVIDER") {
+            let value = val.trim().to_string();
+            self.providers.fallback.provider = if value.is_empty() { None } else { Some(value) };
+        }
+
+        // Provider rotation behavior
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ROTATION_ENABLED") {
+            self.providers.rotation.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ROTATION_STRATEGY") {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "priority" => {
+                    self.providers.rotation.strategy =
+                        crate::providers::rotation::RotationStrategy::Priority
+                }
+                "round_robin" | "roundrobin" => {
+                    self.providers.rotation.strategy =
+                        crate::providers::rotation::RotationStrategy::RoundRobin
+                }
+                _ => {}
+            }
+        }
+
+        // Per-provider quota overrides — Anthropic
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_MAX_COST_USD") {
+            if let Ok(v) = val.parse::<f64>() {
+                let provider = self
+                    .providers
+                    .anthropic
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .max_cost_usd = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_MAX_TOKENS") {
+            if let Ok(v) = val.parse::<u64>() {
+                let provider = self
+                    .providers
+                    .anthropic
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .max_tokens = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_PERIOD") {
+            use crate::providers::quota::QuotaPeriod;
+            let maybe_period = match val.trim().to_ascii_lowercase().as_str() {
+                "daily" => Some(QuotaPeriod::Daily),
+                "monthly" => Some(QuotaPeriod::Monthly),
+                _ => None, // unknown value — skip, don't override config file
+            };
+            if let Some(period) = maybe_period {
+                let provider = self
+                    .providers
+                    .anthropic
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .period = period;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_ACTION") {
+            use crate::providers::quota::QuotaAction;
+            let maybe_action = match val.trim().to_ascii_lowercase().as_str() {
+                "fallback" => Some(QuotaAction::Fallback),
+                "warn" => Some(QuotaAction::Warn),
+                "reject" => Some(QuotaAction::Reject),
+                _ => None, // unknown value — skip
+            };
+            if let Some(action) = maybe_action {
+                let provider = self
+                    .providers
+                    .anthropic
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .action = action;
+            }
+        }
+
+        // Per-provider quota overrides — OpenAI
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_QUOTA_MAX_COST_USD") {
+            if let Ok(v) = val.parse::<f64>() {
+                let provider = self
+                    .providers
+                    .openai
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .max_cost_usd = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_QUOTA_MAX_TOKENS") {
+            if let Ok(v) = val.parse::<u64>() {
+                let provider = self
+                    .providers
+                    .openai
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .max_tokens = Some(v);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_QUOTA_PERIOD") {
+            use crate::providers::quota::QuotaPeriod;
+            let maybe_period = match val.trim().to_ascii_lowercase().as_str() {
+                "daily" => Some(QuotaPeriod::Daily),
+                "monthly" => Some(QuotaPeriod::Monthly),
+                _ => None, // unknown value — skip, don't override config file
+            };
+            if let Some(period) = maybe_period {
+                let provider = self
+                    .providers
+                    .openai
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .period = period;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROVIDERS_OPENAI_QUOTA_ACTION") {
+            use crate::providers::quota::QuotaAction;
+            let maybe_action = match val.trim().to_ascii_lowercase().as_str() {
+                "fallback" => Some(QuotaAction::Fallback),
+                "warn" => Some(QuotaAction::Warn),
+                "reject" => Some(QuotaAction::Reject),
+                _ => None, // unknown value — skip
+            };
+            if let Some(action) = maybe_action {
+                let provider = self
+                    .providers
+                    .openai
+                    .get_or_insert_with(ProviderConfig::default);
+                provider
+                    .quota
+                    .get_or_insert_with(crate::providers::quota::QuotaConfig::default)
+                    .action = action;
+            }
+        }
+    }
+
+    /// Apply channel-specific environment variable overrides
+    fn apply_channel_env_overrides(&mut self) {
+        // Telegram
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_TELEGRAM_TOKEN")
+            .or_else(|_| std::env::var("HMANLAB_CHANNELS_TELEGRAM_BOT_TOKEN"))
+        {
+            let channel = self
+                .channels
+                .telegram
+                .get_or_insert_with(TelegramConfig::default);
+            channel.token = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_TELEGRAM_ENABLED") {
+            if let Ok(enabled) = val.parse() {
+                let channel = self
+                    .channels
+                    .telegram
+                    .get_or_insert_with(TelegramConfig::default);
+                channel.enabled = enabled;
+            }
+        }
+
+        // Discord
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_DISCORD_TOKEN") {
+            let channel = self
+                .channels
+                .discord
+                .get_or_insert_with(DiscordConfig::default);
+            channel.token = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_DISCORD_ENABLED") {
+            if let Ok(enabled) = val.parse() {
+                let channel = self
+                    .channels
+                    .discord
+                    .get_or_insert_with(DiscordConfig::default);
+                channel.enabled = enabled;
+            }
+        }
+
+        // Slack
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_SLACK_BOT_TOKEN") {
+            let channel = self.channels.slack.get_or_insert_with(SlackConfig::default);
+            channel.bot_token = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_SLACK_APP_TOKEN") {
+            let channel = self.channels.slack.get_or_insert_with(SlackConfig::default);
+            channel.app_token = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_SLACK_ENABLED") {
+            if let Ok(enabled) = val.parse() {
+                let channel = self.channels.slack.get_or_insert_with(SlackConfig::default);
+                channel.enabled = enabled;
+            }
+        }
+
+        // WhatsApp Web
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_WHATSAPP_WEB_AUTH_DIR") {
+            let channel = self
+                .channels
+                .whatsapp_web
+                .get_or_insert_with(WhatsAppWebConfig::default);
+            channel.auth_dir = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_WHATSAPP_AUTH_DIR") {
+            let channel = self
+                .channels
+                .whatsapp_web
+                .get_or_insert_with(WhatsAppWebConfig::default);
+            channel.auth_dir = val;
+        }
+        if let Ok(Ok(enabled)) =
+            std::env::var("HMANLAB_CHANNELS_WHATSAPP_WEB_ENABLED").map(|v| v.parse::<bool>())
+        {
+            let channel = self
+                .channels
+                .whatsapp_web
+                .get_or_insert_with(WhatsAppWebConfig::default);
+            channel.enabled = enabled;
+        }
+        if let Ok(Ok(enabled)) =
+            std::env::var("HMANLAB_CHANNELS_WHATSAPP_ENABLED").map(|v| v.parse::<bool>())
+        {
+            let channel = self
+                .channels
+                .whatsapp_web
+                .get_or_insert_with(WhatsAppWebConfig::default);
+            channel.enabled = enabled;
+        }
+
+        // ACP
+        if let Ok(Ok(enabled)) =
+            std::env::var("HMANLAB_CHANNELS_ACP_ENABLED").map(|v| v.parse::<bool>())
+        {
+            let channel = self
+                .channels
+                .acp
+                .get_or_insert_with(AcpChannelConfig::default);
+            channel.enabled = enabled;
+        }
+        if let Ok(Ok(enabled)) =
+            std::env::var("HMANLAB_CHANNELS_ACP_HTTP_ENABLED").map(|v| v.parse::<bool>())
+        {
+            let channel = self
+                .channels
+                .acp
+                .get_or_insert_with(AcpChannelConfig::default);
+            let http = channel.http.get_or_insert_with(AcpHttpConfig::default);
+            http.enabled = enabled;
+        }
+        if let Ok(Ok(port)) =
+            std::env::var("HMANLAB_CHANNELS_ACP_HTTP_PORT").map(|v| v.parse::<u16>())
+        {
+            let channel = self
+                .channels
+                .acp
+                .get_or_insert_with(AcpChannelConfig::default);
+            let http = channel.http.get_or_insert_with(AcpHttpConfig::default);
+            http.port = port;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_ACP_HTTP_AUTH_TOKEN") {
+            if !val.is_empty() {
+                let channel = self
+                    .channels
+                    .acp
+                    .get_or_insert_with(AcpChannelConfig::default);
+                let http = channel.http.get_or_insert_with(AcpHttpConfig::default);
+                http.auth_token = Some(val);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CHANNELS_ACP_HTTP_BIND") {
+            if !val.is_empty() {
+                let channel = self
+                    .channels
+                    .acp
+                    .get_or_insert_with(AcpChannelConfig::default);
+                let http = channel.http.get_or_insert_with(AcpHttpConfig::default);
+                http.bind = val;
+            }
+        }
+        if let Ok(Ok(ttl)) =
+            std::env::var("HMANLAB_CHANNELS_ACP_SESSION_TTL_SECS").map(|v| v.parse::<u64>())
+        {
+            let channel = self
+                .channels
+                .acp
+                .get_or_insert_with(AcpChannelConfig::default);
+            channel.session_ttl_secs = Some(ttl);
+        }
+
+        // Runtime: Apple Container
+        if let Ok(val) = std::env::var("HMANLAB_RUNTIME_APPLE_ALLOW_EXPERIMENTAL") {
+            if let Ok(v) = val.parse() {
+                self.runtime.apple.allow_experimental = v;
+            }
+        }
+
+        // Runtime: Docker
+        if let Ok(v) = std::env::var("HMANLAB_RUNTIME_DOCKER_PIDS_LIMIT") {
+            if let Ok(n) = v.parse::<u32>() {
+                self.runtime.docker.pids_limit = Some(n);
+            }
+        }
+        if let Ok(v) = std::env::var("HMANLAB_RUNTIME_DOCKER_STOP_TIMEOUT_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                self.runtime.docker.stop_timeout_secs = n;
+            }
+        }
+    }
+
+    /// Apply tool-specific environment variable overrides
+    fn apply_tool_env_overrides(&mut self) {
+        // Web search API key (prefer explicit tool-scoped variable).
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WEB_SEARCH_API_KEY") {
+            self.tools.web.search.api_key = Some(val);
+        } else if let Ok(val) = std::env::var("HMANLAB_INTEGRATIONS_BRAVE_API_KEY") {
+            self.tools.web.search.api_key = Some(val);
+        } else if let Ok(val) = std::env::var("BRAVE_API_KEY") {
+            self.tools.web.search.api_key = Some(val);
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WEB_SEARCH_MAX_RESULTS") {
+            if let Ok(v) = val.parse::<u32>() {
+                self.tools.web.search.max_results = v.clamp(1, 10);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WEB_SEARCH_PROVIDER") {
+            self.tools.web.search.provider = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WEB_SEARCH_API_URL") {
+            self.tools.web.search.api_url = Some(val);
+        }
+
+        // WhatsApp tool configuration
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WHATSAPP_PHONE_NUMBER_ID") {
+            self.tools.whatsapp.phone_number_id = Some(val);
+        } else if let Ok(val) = std::env::var("HMANLAB_INTEGRATIONS_WHATSAPP_PHONE_NUMBER_ID") {
+            self.tools.whatsapp.phone_number_id = Some(val);
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WHATSAPP_ACCESS_TOKEN") {
+            self.tools.whatsapp.access_token = Some(val);
+        } else if let Ok(val) = std::env::var("HMANLAB_INTEGRATIONS_WHATSAPP_ACCESS_TOKEN") {
+            self.tools.whatsapp.access_token = Some(val);
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_WHATSAPP_DEFAULT_LANGUAGE") {
+            if !val.trim().is_empty() {
+                self.tools.whatsapp.default_language = val;
+            }
+        }
+
+        // Google Sheets tool configuration
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_GOOGLE_SHEETS_ACCESS_TOKEN") {
+            self.tools.google_sheets.access_token = Some(val);
+        } else if let Ok(val) = std::env::var("HMANLAB_INTEGRATIONS_GOOGLE_SHEETS_ACCESS_TOKEN") {
+            self.tools.google_sheets.access_token = Some(val);
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_GOOGLE_SHEETS_SERVICE_ACCOUNT_BASE64") {
+            self.tools.google_sheets.service_account_base64 = Some(val);
+        } else if let Ok(val) =
+            std::env::var("HMANLAB_INTEGRATIONS_GOOGLE_SHEETS_SERVICE_ACCOUNT_BASE64")
+        {
+            self.tools.google_sheets.service_account_base64 = Some(val);
+        }
+
+        // Google Workspace tool
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_GOOGLE_ACCESS_TOKEN") {
+            self.tools.google.access_token = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_GOOGLE_CLIENT_ID") {
+            self.tools.google.client_id = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_TOOLS_GOOGLE_CLIENT_SECRET") {
+            self.tools.google.client_secret = Some(val);
+        }
+
+        if let Ok(v) = std::env::var("HMANLAB_TOOLS_TRANSCRIBE_GROQ_API_KEY") {
+            self.tools.transcribe.groq_api_key = Some(v);
+        }
+        if let Ok(v) = std::env::var("HMANLAB_TOOLS_TRANSCRIBE_ENABLED") {
+            self.tools.transcribe.enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("HMANLAB_TOOLS_CODING_TOOLS") {
+            self.tools.coding_tools = v == "true" || v == "1";
+        }
+    }
+
+    /// Apply memory-specific environment variable overrides.
+    fn apply_memory_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_BACKEND") {
+            let normalized = val.trim().to_ascii_lowercase();
+            if let Some(parsed) = match normalized.as_str() {
+                "none" | "disabled" => Some(MemoryBackend::Disabled),
+                "builtin" => Some(MemoryBackend::Builtin),
+                "qmd" => Some(MemoryBackend::Qmd),
+                "bm25" => Some(MemoryBackend::Bm25),
+                "embedding" => Some(MemoryBackend::Embedding),
+                "hnsw" => Some(MemoryBackend::Hnsw),
+                "tantivy" => Some(MemoryBackend::Tantivy),
+                _ => None,
+            } {
+                self.memory.backend = parsed;
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_CITATIONS") {
+            let normalized = val.trim().to_ascii_lowercase();
+            if let Some(parsed) = match normalized.as_str() {
+                "on" | "true" => Some(MemoryCitationsMode::On),
+                "off" | "false" => Some(MemoryCitationsMode::Off),
+                "auto" => Some(MemoryCitationsMode::Auto),
+                _ => None,
+            } {
+                self.memory.citations = parsed;
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_MAX_RESULTS") {
+            if let Ok(v) = val.parse::<u32>() {
+                self.memory.max_results = v.clamp(1, 50);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_MIN_SCORE") {
+            if let Ok(v) = val.parse::<f32>() {
+                self.memory.min_score = v.clamp(0.0, 1.0);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_MAX_SNIPPET_CHARS") {
+            if let Ok(v) = val.parse::<u32>() {
+                self.memory.max_snippet_chars = v.clamp(64, 10_000);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_INCLUDE_DEFAULT_MEMORY") {
+            if let Ok(v) = val.parse::<bool>() {
+                self.memory.include_default_memory = v;
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_EXTRA_PATHS") {
+            self.memory.extra_paths = val
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_EMBEDDING_PROVIDER") {
+            self.memory.embedding_provider = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_EMBEDDING_MODEL") {
+            self.memory.embedding_model = Some(val);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_HYGIENE_ENABLED") {
+            self.memory.hygiene.enabled = val.parse().unwrap_or(true);
+        }
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_HYGIENE_INTERVAL_HOURS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.memory.hygiene.interval_hours = n;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_MEMORY_HYGIENE_MAX_ENTRIES") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.memory.hygiene.max_entries = n;
+            }
+        }
+    }
+
+    /// Apply heartbeat-specific environment variable overrides.
+    fn apply_heartbeat_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_HEARTBEAT_ENABLED") {
+            if let Ok(v) = val.parse::<bool>() {
+                self.heartbeat.enabled = v;
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_HEARTBEAT_INTERVAL_SECS") {
+            if let Ok(v) = val.parse::<u64>() {
+                self.heartbeat.interval_secs = v.clamp(30, 24 * 60 * 60);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_HEARTBEAT_FILE_PATH") {
+            if !val.trim().is_empty() {
+                self.heartbeat.file_path = Some(val);
+            }
+        }
+
+        if let Ok(v) = std::env::var("HMANLAB_HEARTBEAT_DELIVER_TO") {
+            self.heartbeat.deliver_to = if v.is_empty() { None } else { Some(v) };
+        }
+    }
+
+    /// Apply skills-specific environment variable overrides.
+    fn apply_skills_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_SKILLS_ENABLED") {
+            if let Ok(v) = val.parse::<bool>() {
+                self.skills.enabled = v;
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_SKILLS_WORKSPACE_DIR") {
+            if !val.trim().is_empty() {
+                self.skills.workspace_dir = Some(val);
+            }
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_SKILLS_ALWAYS_LOAD") {
+            self.skills.always_load = val
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_SKILLS_DISABLED") {
+            self.skills.disabled = val
+                .split(',')
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+
+        if let Ok(val) = std::env::var("HMANLAB_SKILLS_GITHUB_TOKEN") {
+            if !val.trim().is_empty() {
+                self.skills.github_token = Some(val);
+            }
+        }
+    }
+
+    /// Apply safety-layer environment variable overrides.
+    fn apply_safety_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_ENABLED") {
+            self.safety.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_INJECTION_CHECK_ENABLED") {
+            self.safety.injection_check_enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_LEAK_DETECTION_ENABLED") {
+            self.safety.leak_detection_enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_MAX_OUTPUT_LENGTH") {
+            if let Ok(v) = val.parse::<usize>() {
+                self.safety.max_output_length = v.clamp(1_000, 10_000_000);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_TAINT_ENABLED") {
+            self.safety.taint.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_TAINT_BLOCK_ON_VIOLATION") {
+            self.safety.taint.block_on_violation = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SAFETY_TAINT_TRUSTED_TOOLS") {
+            self.safety.taint.trusted_tools = val
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+
+    /// Apply context-compaction environment variable overrides.
+    fn apply_compaction_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_COMPACTION_ENABLED") {
+            self.compaction.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_COMPACTION_CONTEXT_LIMIT") {
+            if let Ok(v) = val.parse::<usize>() {
+                self.compaction.context_limit = v.clamp(1_000, 1_000_000);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_COMPACTION_THRESHOLD") {
+            if let Ok(v) = val.parse::<f64>() {
+                self.compaction.threshold = v.clamp(0.1, 1.0);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_COMPACTION_EMERGENCY_THRESHOLD") {
+            if let Ok(v) = val.parse::<f64>() {
+                self.compaction.emergency_threshold = v.clamp(0.1, 1.0);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_COMPACTION_CRITICAL_THRESHOLD") {
+            if let Ok(v) = val.parse::<f64>() {
+                self.compaction.critical_threshold = v.clamp(0.1, 1.0);
+            }
+        }
+    }
+
+    /// Apply project management tool environment variable overrides.
+    fn apply_project_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_BACKEND") {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "github" => self.project.backend = ProjectBackend::Github,
+                "jira" => self.project.backend = ProjectBackend::Jira,
+                "linear" => self.project.backend = ProjectBackend::Linear,
+                _ => {}
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_DEFAULT_PROJECT") {
+            self.project.default_project = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_GITHUB_TOKEN") {
+            let val = val.trim().to_string();
+            self.project.github_token = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_JIRA_URL") {
+            self.project.jira_url = val;
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_JIRA_TOKEN") {
+            let val = val.trim().to_string();
+            self.project.jira_token = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_PROJECT_LINEAR_API_KEY") {
+            let val = val.trim().to_string();
+            self.project.linear_api_key = if val.is_empty() { None } else { Some(val) };
+        }
+    }
+
+    /// Apply routines environment variable overrides.
+    fn apply_routines_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_ROUTINES_ENABLED") {
+            self.routines.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_ROUTINES_CRON_INTERVAL_SECS") {
+            if let Ok(v) = val.parse::<u64>() {
+                self.routines.cron_interval_secs = v.clamp(1, 3600);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_ROUTINES_MAX_CONCURRENT") {
+            if let Ok(v) = val.parse::<usize>() {
+                self.routines.max_concurrent = v.clamp(1, 100);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_ROUTINES_JITTER_MS") {
+            if let Ok(v) = val.parse::<u64>() {
+                self.routines.jitter_ms = v;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_ROUTINES_ON_MISS") {
+            match val.to_lowercase().as_str() {
+                "skip" => self.routines.on_miss = crate::cron::OnMiss::Skip,
+                "run_once" => self.routines.on_miss = crate::cron::OnMiss::RunOnce,
+                _ => {}
+            }
+        }
+        if let Ok(v) = std::env::var("HMANLAB_HEALTH_ENABLED") {
+            self.health.enabled = v == "true" || v == "1";
+        }
+        if let Ok(v) = std::env::var("HMANLAB_HEALTH_HOST") {
+            self.health.host = v;
+        }
+        if let Ok(v) = std::env::var("HMANLAB_HEALTH_PORT") {
+            if let Ok(port) = v.parse::<u16>() {
+                self.health.port = port;
+            }
+        }
+    }
+
+    /// Apply Stripe environment variable overrides.
+    fn apply_stripe_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_STRIPE_SECRET_KEY") {
+            let val = val.trim().to_string();
+            self.stripe.secret_key = if val.is_empty() { None } else { Some(val) };
+        }
+        if let Ok(val) = std::env::var("HMANLAB_STRIPE_DEFAULT_CURRENCY") {
+            let val = val.trim().to_ascii_lowercase();
+            if !val.is_empty() {
+                self.stripe.default_currency = val;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_STRIPE_WEBHOOK_SECRET") {
+            let val = val.trim().to_string();
+            self.stripe.webhook_secret = if val.is_empty() { None } else { Some(val) };
+        }
+    }
+
+    /// Apply cache environment variable overrides.
+    fn apply_cache_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_CACHE_ENABLED") {
+            self.cache.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CACHE_TTL_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.cache.ttl_secs = n;
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_CACHE_MAX_ENTRIES") {
+            if let Ok(n) = val.parse::<usize>() {
+                self.cache.max_entries = n;
+            }
+        }
+    }
+
+    /// Apply device pairing environment variable overrides.
+    fn apply_pairing_env_overrides(&mut self) {
+        if let Ok(val) = std::env::var("HMANLAB_SECURITY_PAIRING_ENABLED") {
+            self.pairing.enabled = val.eq_ignore_ascii_case("true") || val == "1";
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SECURITY_PAIRING_MAX_ATTEMPTS") {
+            if let Ok(n) = val.parse::<u32>() {
+                self.pairing.max_attempts = n.clamp(1, 100);
+            }
+        }
+        if let Ok(val) = std::env::var("HMANLAB_SECURITY_PAIRING_LOCKOUT_SECS") {
+            if let Ok(n) = val.parse::<u64>() {
+                self.pairing.lockout_secs = n.clamp(10, 86400);
+            }
+        }
+    }
+
+    /// Save configuration to the default path
+    pub fn save(&self) -> Result<()> {
+        self.save_to_path(&Self::path())
+    }
+
+    /// Save configuration to a specific path
+    pub fn save_to_path(&self, path: &PathBuf) -> Result<()> {
+        // Ensure directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
+    }
+
+    /// Initialize the global configuration.
+    ///
+    /// This should be called once at startup. Subsequent calls will return
+    /// an error if the config is already initialized.
+    pub fn init() -> Result<()> {
+        let config = Self::load()?;
+        CONFIG
+            .set(RwLock::new(config))
+            .map_err(|_| ZeptoError::Config("Configuration already initialized".to_string()))
+    }
+
+    /// Initialize the global configuration with a specific config.
+    ///
+    /// Useful for testing or custom initialization.
+    pub fn init_with(config: Config) -> Result<()> {
+        CONFIG
+            .set(RwLock::new(config))
+            .map_err(|_| ZeptoError::Config("Configuration already initialized".to_string()))
+    }
+
+    /// Get a clone of the current global configuration.
+    ///
+    /// Returns default configuration if not yet initialized.
+    pub fn get() -> Config {
+        CONFIG
+            .get()
+            .and_then(|lock| lock.read().ok())
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
+    }
+
+    /// Update the global configuration.
+    ///
+    /// Returns an error if the config hasn't been initialized yet.
+    pub fn update<F>(f: F) -> Result<()>
+    where
+        F: FnOnce(&mut Config),
+    {
+        let lock = CONFIG
+            .get()
+            .ok_or_else(|| ZeptoError::Config("Configuration not initialized".to_string()))?;
+        let mut guard = lock
+            .write()
+            .map_err(|_| ZeptoError::Config("Failed to acquire config write lock".to_string()))?;
+        f(&mut guard);
+        Ok(())
+    }
+
+    /// Returns the expanded workspace path (resolves ~ to home directory)
+    pub fn workspace_path(&self) -> PathBuf {
+        expand_home(&self.agents.defaults.workspace)
+    }
+
+    /// Get the first available API key from configured providers.
+    ///
+    /// Checks providers in order: OpenRouter, Anthropic, OpenAI, Gemini, Zhipu, Groq
+    pub fn get_api_key(&self) -> Option<String> {
+        // Check providers in priority order
+        let providers = [
+            &self.providers.openrouter,
+            &self.providers.anthropic,
+            &self.providers.openai,
+            &self.providers.gemini,
+            &self.providers.zhipu,
+            &self.providers.groq,
+        ];
+
+        for config in providers.into_iter().flatten() {
+            if let Some(ref key) = config.api_key {
+                if !key.is_empty() {
+                    return Some(key.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the API base URL for the first configured provider.
+    pub fn get_api_base(&self) -> Option<String> {
+        // OpenRouter
+        if let Some(ref config) = self.providers.openrouter {
+            if config
+                .api_key
+                .as_ref()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                return config
+                    .api_base
+                    .clone()
+                    .or_else(|| Some("https://openrouter.ai/api/v1".to_string()));
+            }
+        }
+
+        // Zhipu
+        if let Some(ref config) = self.providers.zhipu {
+            if config
+                .api_key
+                .as_ref()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                return config.api_base.clone();
+            }
+        }
+
+        // VLLM
+        if let Some(ref config) = self.providers.vllm {
+            if config
+                .api_key
+                .as_ref()
+                .map(|k| !k.is_empty())
+                .unwrap_or(false)
+            {
+                return config.api_base.clone();
+            }
+        }
+
+        None
+    }
+}
+
+/// Check if any string value in the JSON tree starts with `ENC[`.
+fn has_encrypted_values(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(s) => {
+            crate::security::encryption::SecretEncryption::is_encrypted(s)
+        }
+        serde_json::Value::Object(map) => map.values().any(has_encrypted_values),
+        serde_json::Value::Array(arr) => arr.iter().any(has_encrypted_values),
+        _ => false,
+    }
+}
+
+/// Decrypt all `ENC[...]` string values in the JSON tree in place.
+fn decrypt_config_values(
+    value: &mut serde_json::Value,
+    enc: &crate::security::encryption::SecretEncryption,
+) -> Result<()> {
+    match value {
+        serde_json::Value::String(s) => {
+            if crate::security::encryption::SecretEncryption::is_encrypted(s) {
+                *s = enc.decrypt(s)?;
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for val in map.values_mut() {
+                decrypt_config_values(val, enc)?;
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                decrypt_config_values(item, enc)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Expand ~ to home directory in a path string
+pub fn expand_home(path: &str) -> PathBuf {
+    if path.is_empty() {
+        return PathBuf::from(path);
+    }
+
+    if path.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            if path.len() > 1 && path.chars().nth(1) == Some('/') {
+                return home.join(&path[2..]);
+            }
+            return home;
+        }
+    }
+
+    PathBuf::from(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::env;
+
+    #[test]
+    fn test_config_default() {
+        let config = Config::default();
+        assert_eq!(config.agents.defaults.model, "claude-sonnet-4-6");
+        assert_eq!(config.agents.defaults.max_tokens, 8192);
+        assert_eq!(config.agents.defaults.temperature, 0.7);
+        assert_eq!(config.agents.defaults.max_tool_iterations, 20);
+        assert_eq!(config.agents.defaults.workspace, "~/.hmanlab/workspace");
+        assert_eq!(config.gateway.host, "0.0.0.0");
+        assert_eq!(config.gateway.port, 8080);
+        assert_eq!(config.memory.backend, MemoryBackend::Builtin);
+        assert_eq!(config.memory.citations, MemoryCitationsMode::Auto);
+        assert_eq!(config.memory.max_results, 6);
+        assert_eq!(config.memory.min_score, 0.2);
+        assert!(!config.heartbeat.enabled);
+        assert_eq!(config.heartbeat.interval_secs, 30 * 60);
+        assert!(config.skills.enabled);
+        assert_eq!(config.runtime.runtime_type, RuntimeType::Native);
+        assert!(!config.runtime.allow_fallback_to_native);
+    }
+
+    #[test]
+    fn test_config_from_json() {
+        let json = r#"{"agents": {"defaults": {"model": "gpt-4", "max_tokens": 4096}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.agents.defaults.model, "gpt-4");
+        assert_eq!(config.agents.defaults.max_tokens, 4096);
+        // Defaults should apply to unspecified fields
+        assert_eq!(config.agents.defaults.temperature, 0.7);
+        assert_eq!(config.gateway.port, 8080);
+    }
+
+    #[test]
+    fn test_config_to_json() {
+        let config = Config::default();
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(json.contains("claude-sonnet-4-6"));
+        assert!(json.contains("8192"));
+    }
+
+    #[test]
+    fn test_config_partial_json() {
+        // Test that partial JSON works with defaults
+        let json = r#"{"gateway": {"port": 9090}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.gateway.port, 9090);
+        assert_eq!(config.gateway.host, "0.0.0.0"); // Default
+        assert_eq!(config.agents.defaults.model, "claude-sonnet-4-6"); // Default
+    }
+
+    #[test]
+    fn test_expand_home() {
+        let home = dirs::home_dir().unwrap();
+
+        // Test ~ expansion
+        let expanded = expand_home("~/.hmanlab");
+        assert_eq!(expanded, home.join(".hmanlab"));
+
+        // Test ~/path expansion
+        let expanded = expand_home("~/some/path");
+        assert_eq!(expanded, home.join("some/path"));
+
+        // Test absolute path (no expansion)
+        let expanded = expand_home("/absolute/path");
+        assert_eq!(expanded, PathBuf::from("/absolute/path"));
+
+        // Test relative path (no expansion)
+        let expanded = expand_home("relative/path");
+        assert_eq!(expanded, PathBuf::from("relative/path"));
+
+        // Test empty path
+        let expanded = expand_home("");
+        assert_eq!(expanded, PathBuf::from(""));
+    }
+
+    #[test]
+    fn test_workspace_path() {
+        let config = Config::default();
+        let workspace = config.workspace_path();
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(workspace, home.join(".hmanlab/workspace"));
+    }
+
+    #[test]
+    fn test_config_dir() {
+        let dir = Config::dir();
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(dir, home.join(".hmanlab"));
+    }
+
+    #[test]
+    fn test_config_path() {
+        let path = Config::path();
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(path, home.join(".hmanlab/config.json"));
+    }
+
+    #[test]
+    fn test_channel_configs() {
+        let json = r#"{
+            "channels": {
+                "telegram": {
+                    "enabled": true,
+                    "token": "bot123:ABC",
+                    "allow_from": ["user1", "user2"]
+                },
+                "discord": {
+                    "enabled": false,
+                    "token": "discord-token"
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        let telegram = config.channels.telegram.unwrap();
+        assert!(telegram.enabled);
+        assert_eq!(telegram.token, "bot123:ABC");
+        assert_eq!(telegram.allow_from, vec!["user1", "user2"]);
+        assert!(telegram.allow_usernames);
+
+        let discord = config.channels.discord.unwrap();
+        assert!(!discord.enabled);
+        assert_eq!(discord.token, "discord-token");
+    }
+
+    #[test]
+    fn test_telegram_channel_config_can_disable_username_matching() {
+        let json = r#"{
+            "channels": {
+                "telegram": {
+                    "enabled": true,
+                    "token": "bot123:ABC",
+                    "allow_from": ["123456789"],
+                    "allow_usernames": false
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let telegram = config.channels.telegram.unwrap();
+        assert!(!telegram.allow_usernames);
+    }
+
+    #[test]
+    fn test_provider_configs() {
+        let json = r#"{
+            "providers": {
+                "anthropic": {
+                    "api_key": "sk-ant-xxx"
+                },
+                "openai": {
+                    "api_key": "sk-xxx",
+                    "api_base": "https://api.openai.com/v1"
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        let anthropic = config.providers.anthropic.unwrap();
+        assert_eq!(anthropic.api_key, Some("sk-ant-xxx".to_string()));
+
+        let openai = config.providers.openai.unwrap();
+        assert_eq!(openai.api_key, Some("sk-xxx".to_string()));
+        assert_eq!(
+            openai.api_base,
+            Some("https://api.openai.com/v1".to_string())
+        );
+    }
+
+    #[test]
+    fn test_get_api_key() {
+        let mut config = Config::default();
+
+        // No API keys configured
+        assert!(config.get_api_key().is_none());
+
+        // Add OpenAI key
+        config.providers.openai = Some(ProviderConfig {
+            api_key: Some("openai-key".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(config.get_api_key(), Some("openai-key".to_string()));
+
+        // OpenRouter has higher priority
+        config.providers.openrouter = Some(ProviderConfig {
+            api_key: Some("openrouter-key".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(config.get_api_key(), Some("openrouter-key".to_string()));
+    }
+
+    #[test]
+    fn test_env_override() {
+        // Set env var
+        env::set_var("HMANLAB_AGENTS_DEFAULTS_MODEL", "test-model");
+        env::set_var("HMANLAB_AGENTS_DEFAULTS_MAX_TOKENS", "1000");
+        env::set_var("BRAVE_API_KEY", "test-brave-key");
+        env::set_var("HMANLAB_TOOLS_WEB_SEARCH_MAX_RESULTS", "9");
+        env::set_var("HMANLAB_MEMORY_BACKEND", "none");
+        env::set_var("HMANLAB_MEMORY_CITATIONS", "on");
+        env::set_var("HMANLAB_MEMORY_MAX_RESULTS", "12");
+        env::set_var("HMANLAB_MEMORY_MIN_SCORE", "0.55");
+        env::set_var("HMANLAB_MEMORY_INCLUDE_DEFAULT_MEMORY", "false");
+        env::set_var("HMANLAB_MEMORY_EXTRA_PATHS", "notes,archives/2026");
+        env::set_var("HMANLAB_HEARTBEAT_ENABLED", "true");
+        env::set_var("HMANLAB_HEARTBEAT_INTERVAL_SECS", "900");
+        env::set_var("HMANLAB_HEARTBEAT_FILE_PATH", "/tmp/heartbeat.md");
+        env::set_var("HMANLAB_SKILLS_ENABLED", "false");
+        env::set_var("HMANLAB_SKILLS_ALWAYS_LOAD", "github,weather");
+        env::set_var("HMANLAB_SKILLS_DISABLED", "experimental");
+        env::set_var("HMANLAB_TOOLS_WHATSAPP_PHONE_NUMBER_ID", "123456");
+        env::set_var("HMANLAB_TOOLS_WHATSAPP_ACCESS_TOKEN", "wa-token");
+        env::set_var("HMANLAB_TOOLS_GOOGLE_SHEETS_ACCESS_TOKEN", "gs-token");
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+
+        assert_eq!(config.agents.defaults.model, "test-model");
+        assert_eq!(config.agents.defaults.max_tokens, 1000);
+        assert_eq!(
+            config.tools.web.search.api_key,
+            Some("test-brave-key".to_string())
+        );
+        assert_eq!(config.tools.web.search.max_results, 9);
+        assert_eq!(config.memory.backend, MemoryBackend::Disabled);
+        assert_eq!(config.memory.citations, MemoryCitationsMode::On);
+        assert_eq!(config.memory.max_results, 12);
+        assert_eq!(config.memory.min_score, 0.55);
+        assert!(!config.memory.include_default_memory);
+        assert_eq!(
+            config.memory.extra_paths,
+            vec!["notes".to_string(), "archives/2026".to_string()]
+        );
+        assert!(config.heartbeat.enabled);
+        assert_eq!(config.heartbeat.interval_secs, 900);
+        assert_eq!(
+            config.heartbeat.file_path,
+            Some("/tmp/heartbeat.md".to_string())
+        );
+        assert!(!config.skills.enabled);
+        assert_eq!(
+            config.skills.always_load,
+            vec!["github".to_string(), "weather".to_string()]
+        );
+        assert_eq!(config.skills.disabled, vec!["experimental".to_string()]);
+        assert_eq!(
+            config.tools.whatsapp.phone_number_id,
+            Some("123456".to_string())
+        );
+        assert_eq!(
+            config.tools.whatsapp.access_token,
+            Some("wa-token".to_string())
+        );
+        assert_eq!(
+            config.tools.google_sheets.access_token,
+            Some("gs-token".to_string())
+        );
+
+        // Clean up
+        env::remove_var("HMANLAB_AGENTS_DEFAULTS_MODEL");
+        env::remove_var("HMANLAB_AGENTS_DEFAULTS_MAX_TOKENS");
+        env::remove_var("BRAVE_API_KEY");
+        env::remove_var("HMANLAB_TOOLS_WEB_SEARCH_MAX_RESULTS");
+        env::remove_var("HMANLAB_MEMORY_BACKEND");
+        env::remove_var("HMANLAB_MEMORY_CITATIONS");
+        env::remove_var("HMANLAB_MEMORY_MAX_RESULTS");
+        env::remove_var("HMANLAB_MEMORY_MIN_SCORE");
+        env::remove_var("HMANLAB_MEMORY_INCLUDE_DEFAULT_MEMORY");
+        env::remove_var("HMANLAB_MEMORY_EXTRA_PATHS");
+        env::remove_var("HMANLAB_HEARTBEAT_ENABLED");
+        env::remove_var("HMANLAB_HEARTBEAT_INTERVAL_SECS");
+        env::remove_var("HMANLAB_HEARTBEAT_FILE_PATH");
+        env::remove_var("HMANLAB_SKILLS_ENABLED");
+        env::remove_var("HMANLAB_SKILLS_ALWAYS_LOAD");
+        env::remove_var("HMANLAB_SKILLS_DISABLED");
+        env::remove_var("HMANLAB_TOOLS_WHATSAPP_PHONE_NUMBER_ID");
+        env::remove_var("HMANLAB_TOOLS_WHATSAPP_ACCESS_TOKEN");
+        env::remove_var("HMANLAB_TOOLS_GOOGLE_SHEETS_ACCESS_TOKEN");
+    }
+
+    #[test]
+    fn test_memory_config_from_json() {
+        let json = r#"{
+            "memory": {
+                "backend": "qmd",
+                "citations": "off",
+                "include_default_memory": false,
+                "max_results": 9,
+                "min_score": 0.4,
+                "max_snippet_chars": 320,
+                "extra_paths": ["notes", "memory/archive"]
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.memory.backend, MemoryBackend::Qmd);
+        assert_eq!(config.memory.citations, MemoryCitationsMode::Off);
+        assert!(!config.memory.include_default_memory);
+        assert_eq!(config.memory.max_results, 9);
+        assert_eq!(config.memory.min_score, 0.4);
+        assert_eq!(config.memory.max_snippet_chars, 320);
+        assert_eq!(config.memory.extra_paths.len(), 2);
+    }
+
+    #[test]
+    fn test_tools_config() {
+        let json = r#"{
+            "tools": {
+                "web": {
+                    "search": {
+                        "api_key": "search-key",
+                        "max_results": 10
+                    }
+                }
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            config.tools.web.search.api_key,
+            Some("search-key".to_string())
+        );
+        assert_eq!(config.tools.web.search.max_results, 10);
+    }
+
+    #[test]
+    fn test_tools_config_defaults() {
+        let config = Config::default();
+        assert!(config.tools.web.search.api_key.is_none());
+        assert_eq!(config.tools.web.search.max_results, 5);
+        assert!(config.tools.whatsapp.phone_number_id.is_none());
+        assert_eq!(config.tools.whatsapp.default_language, "ms");
+        assert!(config.tools.google_sheets.access_token.is_none());
+    }
+
+    #[test]
+    fn test_heartbeat_and_skills_config_from_json() {
+        let json = r#"{
+            "heartbeat": {
+                "enabled": true,
+                "interval_secs": 600,
+                "file_path": "/tmp/heart.md"
+            },
+            "skills": {
+                "enabled": false,
+                "workspace_dir": "/tmp/skills",
+                "always_load": ["github"],
+                "disabled": ["legacy"]
+            }
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.heartbeat.enabled);
+        assert_eq!(config.heartbeat.interval_secs, 600);
+        assert_eq!(
+            config.heartbeat.file_path,
+            Some("/tmp/heart.md".to_string())
+        );
+        assert!(!config.skills.enabled);
+        assert_eq!(config.skills.workspace_dir, Some("/tmp/skills".to_string()));
+        assert_eq!(config.skills.always_load, vec!["github".to_string()]);
+        assert_eq!(config.skills.disabled, vec!["legacy".to_string()]);
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        use std::fs;
+
+        // Create a temp directory
+        let temp_dir = std::env::temp_dir().join("hmanlab_test");
+        fs::create_dir_all(&temp_dir).unwrap();
+        let config_path = temp_dir.join("config.json");
+
+        // Create and save config
+        let mut config = Config::default();
+        config.agents.defaults.model = "test-model".to_string();
+        config.gateway.port = 9999;
+        config.save_to_path(&config_path).unwrap();
+
+        // Load and verify
+        let loaded = Config::load_from_path(&config_path).unwrap();
+        assert_eq!(loaded.agents.defaults.model, "test-model");
+        assert_eq!(loaded.gateway.port, 9999);
+
+        // Clean up
+        fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_load_nonexistent() {
+        let path = PathBuf::from("/nonexistent/path/config.json");
+        let config = Config::load_from_path(&path).unwrap();
+
+        // Should return defaults (check fields not affected by env var overrides)
+        assert_eq!(config.agents.defaults.max_tool_iterations, 20);
+        assert_eq!(config.agents.defaults.agent_timeout_secs, 300);
+        assert!(!config.agents.defaults.model.is_empty());
+    }
+
+    #[test]
+    fn test_agent_timeout_default() {
+        let config = Config::default();
+        assert_eq!(config.agents.defaults.agent_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_agent_timeout_from_json() {
+        let json = r#"{"agents": {"defaults": {"agent_timeout_secs": 600}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.agents.defaults.agent_timeout_secs, 600);
+    }
+
+    #[test]
+    fn test_message_queue_mode_default() {
+        let config = Config::default();
+        assert_eq!(
+            config.agents.defaults.message_queue_mode,
+            MessageQueueMode::Collect
+        );
+    }
+
+    #[test]
+    fn test_message_queue_mode_from_json() {
+        let json = r#"{"agents": {"defaults": {"message_queue_mode": "followup"}}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            config.agents.defaults.message_queue_mode,
+            MessageQueueMode::Followup
+        );
+    }
+
+    #[test]
+    fn test_env_override_compact_tools() {
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_COMPACT_TOOLS", "true");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert!(config.agents.defaults.compact_tools);
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_COMPACT_TOOLS");
+    }
+
+    #[test]
+    fn test_env_override_per_provider_model() {
+        // Use all provider model env vars to verify they are wired correctly
+        let vars = [
+            (
+                "HMANLAB_PROVIDERS_ANTHROPIC_MODEL",
+                "claude-opus-4-20250514",
+            ),
+            ("HMANLAB_PROVIDERS_OPENAI_MODEL", "gpt-5.1"),
+            ("HMANLAB_PROVIDERS_GEMINI_MODEL", "gemini-2.0-flash"),
+            ("HMANLAB_PROVIDERS_NVIDIA_MODEL", "meta/llama-3.3-70b"),
+            (
+                "HMANLAB_PROVIDERS_OPENROUTER_MODEL",
+                "anthropic/claude-opus-4-20250514",
+            ),
+            ("HMANLAB_PROVIDERS_GROQ_MODEL", "llama-3.3-70b"),
+            ("HMANLAB_PROVIDERS_OLLAMA_MODEL", "mistral:latest"),
+            ("HMANLAB_PROVIDERS_VLLM_MODEL", "meta-llama/Llama-3"),
+            ("HMANLAB_PROVIDERS_ZHIPU_MODEL", "glm-4"),
+            ("HMANLAB_PROVIDERS_DEEPSEEK_MODEL", "deepseek-chat"),
+            ("HMANLAB_PROVIDERS_KIMI_MODEL", "moonshot-v1-128k"),
+        ];
+
+        for (key, val) in &vars {
+            std::env::set_var(key, val);
+        }
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+
+        assert_eq!(
+            config.providers.anthropic.as_ref().unwrap().model,
+            Some("claude-opus-4-20250514".to_string())
+        );
+        assert_eq!(
+            config.providers.openai.as_ref().unwrap().model,
+            Some("gpt-5.1".to_string())
+        );
+        assert_eq!(
+            config.providers.gemini.as_ref().unwrap().model,
+            Some("gemini-2.0-flash".to_string())
+        );
+        assert_eq!(
+            config.providers.nvidia.as_ref().unwrap().model,
+            Some("meta/llama-3.3-70b".to_string())
+        );
+        assert_eq!(
+            config.providers.openrouter.as_ref().unwrap().model,
+            Some("anthropic/claude-opus-4-20250514".to_string())
+        );
+        assert_eq!(
+            config.providers.groq.as_ref().unwrap().model,
+            Some("llama-3.3-70b".to_string())
+        );
+        assert_eq!(
+            config.providers.ollama.as_ref().unwrap().model,
+            Some("mistral:latest".to_string())
+        );
+        assert_eq!(
+            config.providers.vllm.as_ref().unwrap().model,
+            Some("meta-llama/Llama-3".to_string())
+        );
+        assert_eq!(
+            config.providers.zhipu.as_ref().unwrap().model,
+            Some("glm-4".to_string())
+        );
+        assert_eq!(
+            config.providers.deepseek.as_ref().unwrap().model,
+            Some("deepseek-chat".to_string())
+        );
+        assert_eq!(
+            config.providers.kimi.as_ref().unwrap().model,
+            Some("moonshot-v1-128k".to_string())
+        );
+
+        // Clean up
+        for (key, _) in &vars {
+            std::env::remove_var(key);
+        }
+    }
+
+    #[test]
+    fn test_env_override_anthropic_quota_max_cost() {
+        std::env::set_var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_MAX_COST_USD", "5.5");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        let quota = config
+            .providers
+            .anthropic
+            .as_ref()
+            .expect("anthropic provider should be initialized")
+            .quota
+            .as_ref()
+            .expect("quota should be set");
+        assert_eq!(quota.max_cost_usd, Some(5.5));
+        std::env::remove_var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_MAX_COST_USD");
+    }
+
+    #[test]
+    fn test_env_override_anthropic_quota_action_fallback() {
+        use crate::providers::quota::QuotaAction;
+        std::env::set_var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_ACTION", "fallback");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        let quota = config
+            .providers
+            .anthropic
+            .as_ref()
+            .expect("anthropic provider should be initialized")
+            .quota
+            .as_ref()
+            .expect("quota should be set");
+        assert_eq!(quota.action, QuotaAction::Fallback);
+        std::env::remove_var("HMANLAB_PROVIDERS_ANTHROPIC_QUOTA_ACTION");
+    }
+
+    #[test]
+    fn test_azure_env_override_api_key() {
+        // Uses a dedicated env var name to avoid collisions
+        std::env::set_var("HMANLAB_PROVIDERS_AZURE_API_KEY", "test-azure-env-key");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config
+                .providers
+                .azure
+                .as_ref()
+                .and_then(|p| p.api_key.as_deref()),
+            Some("test-azure-env-key")
+        );
+        std::env::remove_var("HMANLAB_PROVIDERS_AZURE_API_KEY");
+    }
+
+    #[test]
+    fn test_bedrock_aws_key_not_auto_enabled_without_config() {
+        std::env::remove_var("HMANLAB_PROVIDERS_BEDROCK_API_KEY");
+        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE");
+        let mut config = Config::default();
+        // Ensure no explicit Bedrock config is present
+        config.providers.bedrock = None;
+        config.apply_env_overrides();
+        // Without explicit Bedrock config, AWS_ACCESS_KEY_ID should NOT activate Bedrock
+        assert!(
+            config.providers.bedrock.is_none()
+                || config.providers.bedrock.as_ref().unwrap().api_key.is_none()
+                || config
+                    .providers
+                    .bedrock
+                    .as_ref()
+                    .unwrap()
+                    .api_key
+                    .as_deref()
+                    != Some("AKIAIOSFODNN7EXAMPLE")
+        );
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+    }
+
+    #[test]
+    fn test_xai_env_override_api_key() {
+        std::env::set_var("HMANLAB_PROVIDERS_XAI_API_KEY", "xai-test-env-key");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config
+                .providers
+                .xai
+                .as_ref()
+                .and_then(|p| p.api_key.as_deref()),
+            Some("xai-test-env-key")
+        );
+        std::env::remove_var("HMANLAB_PROVIDERS_XAI_API_KEY");
+    }
+
+    #[test]
+    fn test_qianfan_env_override_api_key() {
+        std::env::set_var("HMANLAB_PROVIDERS_QIANFAN_API_KEY", "qf-test-env-key");
+        let mut config = Config::default();
+        config.apply_env_overrides();
+        assert_eq!(
+            config
+                .providers
+                .qianfan
+                .as_ref()
+                .and_then(|p| p.api_key.as_deref()),
+            Some("qf-test-env-key")
+        );
+        std::env::remove_var("HMANLAB_PROVIDERS_QIANFAN_API_KEY");
+    }
+
+    #[test]
+    fn test_web_search_env_provider_override() {
+        // Use unique env var names to avoid parallel test interference
+        std::env::set_var("HMANLAB_TOOLS_WEB_SEARCH_PROVIDER", "searxng");
+        std::env::set_var("HMANLAB_TOOLS_WEB_SEARCH_API_URL", "https://s.example.com");
+        let mut cfg = Config::default();
+        cfg.apply_env_overrides();
+        assert_eq!(cfg.tools.web.search.provider.as_deref(), Some("searxng"));
+        assert_eq!(
+            cfg.tools.web.search.api_url.as_deref(),
+            Some("https://s.example.com")
+        );
+        std::env::remove_var("HMANLAB_TOOLS_WEB_SEARCH_PROVIDER");
+        std::env::remove_var("HMANLAB_TOOLS_WEB_SEARCH_API_URL");
+    }
+
+    #[test]
+    fn test_env_override_loop_guard_all_fields() {
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_ENABLED", "false");
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WARN_THRESHOLD", "10");
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_BLOCK_THRESHOLD", "20");
+        std::env::set_var(
+            "HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_GLOBAL_CIRCUIT_BREAKER",
+            "50",
+        );
+        std::env::set_var(
+            "HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_PING_PONG_MIN_REPEATS",
+            "5",
+        );
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_POLL_MULTIPLIER", "4");
+        std::env::set_var(
+            "HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_WARN_THRESHOLD",
+            "7",
+        );
+        std::env::set_var(
+            "HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_BLOCK_THRESHOLD",
+            "9",
+        );
+        std::env::set_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WINDOW_SIZE", "300");
+
+        let mut config = Config::default();
+        config.apply_env_overrides();
+
+        let lg = &config.agents.defaults.loop_guard;
+        assert!(!lg.enabled);
+        assert_eq!(lg.warn_threshold, 10);
+        assert_eq!(lg.block_threshold, 20);
+        assert_eq!(lg.global_circuit_breaker, 50);
+        assert_eq!(lg.ping_pong_min_repeats, 5);
+        assert_eq!(lg.poll_multiplier, 4);
+        assert_eq!(lg.outcome_warn_threshold, 7);
+        assert_eq!(lg.outcome_block_threshold, 9);
+        assert_eq!(lg.window_size, 300);
+
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_ENABLED");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WARN_THRESHOLD");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_BLOCK_THRESHOLD");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_GLOBAL_CIRCUIT_BREAKER");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_PING_PONG_MIN_REPEATS");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_POLL_MULTIPLIER");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_WARN_THRESHOLD");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_OUTCOME_BLOCK_THRESHOLD");
+        std::env::remove_var("HMANLAB_AGENTS_DEFAULTS_LOOP_GUARD_WINDOW_SIZE");
+    }
+}

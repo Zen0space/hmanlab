@@ -1,0 +1,153 @@
+//! Channels module - Communication channels (Telegram, Discord, etc.)
+//!
+//! This module provides the infrastructure for managing communication channels
+//! in HmanLab. Channels are responsible for receiving messages from users
+//! and sending responses back.
+//!
+//! # Architecture
+//!
+//! ```text
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                     ChannelManager                          │
+//! │                                                             │
+//! │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+//! │  │Telegram │  │ Discord │  │  Slack  │  │WhatsApp │  ...  │
+//! │  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘       │
+//! │       │            │            │            │              │
+//! │       │            │ implements │            │              │
+//! │       │            │  Channel   │            │              │
+//! │       │            │   trait    │            │              │
+//! │       └────────────┴─────┬──────┴────────────┘              │
+//! │                          │                                  │
+//! │                    ┌─────┴─────┐                           │
+//! │                    │MessageBus │                           │
+//! │                    │ (inbound/ │                           │
+//! │                    │ outbound) │                           │
+//! │                    └───────────┘                           │
+//! └─────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! # Implementing a New Channel
+//!
+//! To implement a new channel, create a struct that implements the `Channel` trait:
+//!
+//! ```ignore
+//! use async_trait::async_trait;
+//! use hmanlab::channels::{Channel, BaseChannelConfig};
+//! use hmanlab::bus::{MessageBus, OutboundMessage};
+//! use hmanlab::error::Result;
+//! use std::sync::Arc;
+//!
+//! pub struct MyChannel {
+//!     config: BaseChannelConfig,
+//!     running: bool,
+//!     bus: Arc<MessageBus>,
+//! }
+//!
+//! impl MyChannel {
+//!     pub fn new(name: &str, bus: Arc<MessageBus>) -> Self {
+//!         Self {
+//!             config: BaseChannelConfig::new(name),
+//!             running: false,
+//!             bus,
+//!         }
+//!     }
+//! }
+//!
+//! #[async_trait]
+//! impl Channel for MyChannel {
+//!     fn name(&self) -> &str {
+//!         &self.config.name
+//!     }
+//!
+//!     async fn start(&mut self) -> Result<()> {
+//!         self.running = true;
+//!         // Start listening for messages...
+//!         Ok(())
+//!     }
+//!
+//!     async fn stop(&mut self) -> Result<()> {
+//!         self.running = false;
+//!         Ok(())
+//!     }
+//!
+//!     async fn send(&self, msg: OutboundMessage) -> Result<()> {
+//!         // Send message via your channel's API...
+//!         Ok(())
+//!     }
+//!
+//!     fn is_running(&self) -> bool {
+//!         self.running
+//!     }
+//!
+//!     fn is_allowed(&self, user_id: &str) -> bool {
+//!         self.config.is_allowed(user_id)
+//!     }
+//! }
+//! ```
+//!
+//! # Usage
+//!
+//! ```
+//! use std::sync::Arc;
+//! use hmanlab::bus::MessageBus;
+//! use hmanlab::config::Config;
+//! use hmanlab::channels::ChannelManager;
+//!
+//! # tokio_test::block_on(async {
+//! let bus = Arc::new(MessageBus::new());
+//! let config = Config::default();
+//! let manager = ChannelManager::new(bus, config);
+//!
+//! // Register channels
+//! // manager.register(Box::new(telegram_channel)).await;
+//! // manager.register(Box::new(discord_channel)).await;
+//!
+//! // Start all channels
+//! // manager.start_all().await?;
+//! # })
+//! ```
+
+pub mod acp;
+pub mod acp_http;
+mod acp_protocol;
+pub mod discord;
+pub mod email_channel;
+mod factory;
+pub mod lark;
+mod manager;
+pub mod model_switch;
+#[cfg(feature = "mqtt")]
+pub mod mqtt;
+pub mod persona_switch;
+pub mod plugin;
+#[cfg(feature = "hardware")]
+pub mod serial;
+pub mod slack;
+pub mod telegram;
+mod types;
+pub mod webhook;
+pub mod whatsapp_cloud;
+#[cfg(feature = "whatsapp-web")]
+pub mod whatsapp_web;
+
+pub use acp::AcpChannel;
+pub use acp_http::AcpHttpChannel;
+pub use discord::DiscordChannel;
+pub use email_channel::EmailChannel;
+pub use factory::register_configured_channels;
+pub use factory::register_configured_channels_with_approval;
+pub use lark::LarkChannel;
+pub use manager::ChannelManager;
+#[cfg(feature = "mqtt")]
+pub use mqtt::MqttChannel;
+pub use plugin::ChannelPluginAdapter;
+#[cfg(feature = "hardware")]
+pub use serial::SerialChannel;
+pub use slack::SlackChannel;
+pub use telegram::TelegramChannel;
+pub use types::{BaseChannelConfig, Channel};
+pub use webhook::{WebhookChannel, WebhookChannelConfig};
+pub use whatsapp_cloud::WhatsAppCloudChannel;
+#[cfg(feature = "whatsapp-web")]
+pub use whatsapp_web::WhatsAppWebChannel;
