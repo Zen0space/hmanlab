@@ -1,0 +1,169 @@
+name: Auto Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  auto-release:
+    name: Auto tag release
+    if: >
+      github.event.pull_request.merged == true &&
+      !contains(github.event.pull_request.title, '[skip release]')
+    runs-on: ubuntu-latest
+    outputs:
+      tagged: ${{ steps.tag.outputs.tagged }}
+      version: ${{ steps.tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get PR commits
+        id: commits
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          COMMIT_BODIES=""
+          PAGE=1
+          while true; do
+            RESPONSE=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/commits?per_page=100&page=${PAGE}" 2>/dev/null || echo "[]")
+            COUNT=$(echo "$RESPONSE" | jq 'length')
+            [ "$COUNT" = "0" ] && break
+            COMMIT_BODIES="${COMMIT_BODIES}
+          $(echo "$RESPONSE" | jq -r '.[].commit.message')"
+            PAGE=$((PAGE + 1))
+          done
+
+          echo "messages<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$COMMIT_BODIES" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          MESSAGES="${{ steps.commits.outputs.messages }}"
+
+          HAS_BREAKING=0
+          HAS_FEAT=0
+          HAS_PATCH=0
+
+          SKIP_TYPES="docs ci style test"
+
+          while IFS= read -r line; do
+            FIRST_LINE=$(echo "$line" | head -1)
+
+            for skip_type in $SKIP_TYPES; do
+              if echo "$FIRST_LINE" | grep -qE "^${skip_type}(\(.+\))?:"; then
+                continue 2
+              fi
+            done
+
+            if echo "$FIRST_LINE" | grep -qE "^.+!:" || echo "$line" | grep -q "BREAKING CHANGE:"; then
+              HAS_BREAKING=1
+            elif echo "$FIRST_LINE" | grep -qE "^feat(\(.+\))?:"; then
+              HAS_FEAT=1
+            elif echo "$FIRST_LINE" | grep -qE "^(fix|chore|refactor|perf)(\(.+\))?:"; then
+              HAS_PATCH=1
+            fi
+          done <<< "$MESSAGES"
+
+          if [ "$HAS_BREAKING" = "1" ]; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_FEAT" = "1" ]; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          elif [ "$HAS_PATCH" = "1" ]; then
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read current version
+        if: steps.bump.outputs.type != 'none'
+        id: version
+        run: |
+          CURRENT=$(grep '^version = "' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          if [ -z "$CURRENT" ]; then
+            echo "Could not detect version from Cargo.toml"
+            exit 1
+          fi
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        if: steps.bump.outputs.type != 'none'
+        id: tag
+        run: |
+          CURRENT="${{ steps.version.outputs.current }}"
+          BUMP="${{ steps.bump.outputs.type }}"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          case "$BUMP" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          if git tag -l "v${NEW_VERSION}" | grep -q .; then
+            echo "Tag v${NEW_VERSION} already exists, skipping"
+            echo "tagged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i "s/^version = \"${CURRENT}\"/version = \"${NEW_VERSION}\"/" Cargo.toml
+
+          git add Cargo.toml
+          git commit -m "release: v${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin main
+          git push origin "v${NEW_VERSION}"
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tagged=true" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        if: steps.bump.outputs.type != 'none'
+        run: |
+          BUMP="${{ steps.bump.outputs.type }}"
+          VERSION="${{ steps.tag.outputs.version }}"
+          TAGGED="${{ steps.tag.outputs.tagged }}"
+
+          if [ "$TAGGED" = "true" ]; then
+            echo "### Auto Release: v${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Bump**: \`${BUMP}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Tag**: \`v${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Release workflow will now build binaries + Docker image" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Release skipped (tag already exists)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: No release needed
+        if: steps.bump.outputs.type == 'none'
+        run: |
+          echo "### No release needed" >> "$GITHUB_STEP_SUMMARY"
+          echo "PR contains only docs/ci/style/test changes — skipping version bump." >> "$GITHUB_STEP_SUMMARY"

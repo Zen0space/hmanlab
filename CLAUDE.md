@@ -108,7 +108,7 @@ For detailed module docs see `docs/claude/architecture.md`.
 1. Create `~/.hmanlab/skills/<name>/SKILL.md` with YAML frontmatter
 2. Or: `hmanlab skills create <name>`
 3. Loader priority: `metadata.hmanlab` > `metadata.openclaw` > raw. Extensions: `os`, `requires.anyBins`
-4. Core skills in `skills/` (`github`, `skill-creator`, `deep-research`), community at github.com/qhkm/hmanlab-skills
+4. Core skills in `skills/` (`github`, `skill-creator`, `deep-research`), community at github.com/Zen0space/hmanlab-skills
 
 ## Configuration
 

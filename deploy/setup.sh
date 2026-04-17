@@ -8,13 +8,13 @@ set -eu
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-REPO="qhkm/hmanlab"
+REPO="Zen0space/hmanlab"
 BINARY="hmanlab"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.hmanlab"
 SERVICE_NAME="hmanlab"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-DOCKER_IMAGE="ghcr.io/qhkm/hmanlab:latest"
+DOCKER_IMAGE="ghcr.io/zen0space/hmanlab:latest"
 CONTAINER_NAME="hmanlab"
 
 # ─── Colors (only if terminal) ───────────────────────────────────────────────
@@ -315,6 +315,8 @@ main() {
     ok "HmanLab ${VERSION}"
     printf "\n${BOLD}Next step:${RESET}\n"
     printf "  docker run --rm -it -v %s:/data/.hmanlab %s hmanlab onboard\n\n" "$CONFIG_DIR" "$DOCKER_IMAGE"
+    printf "${BOLD}Then start the gateway:${RESET}\n"
+    printf "  docker run -d --name hmanlab -p 8080:8080 -p 9090:9090 -v %s:/data/.hmanlab %s hmanlab gateway\n\n" "$CONFIG_DIR" "$DOCKER_IMAGE"
   else
     VERSION="$(${INSTALL_DIR}/${BINARY} --version 2>/dev/null || echo 'installed')"
     ok "HmanLab ${VERSION}"

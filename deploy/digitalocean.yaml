@@ -19,7 +19,7 @@ spec:
   workers:
     - name: hmanlab-worker
       github:
-        repo: qhkm/hmanlab
+        repo: Zen0space/hmanlab
         branch: main
         deploy_on_push: true
       dockerfile_path: Dockerfile

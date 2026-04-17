@@ -39,7 +39,7 @@ curl -fsSL https://hmanlab.com/setup.sh | bash -s -- --uninstall
 The simplest production deployment:
 
 ```dockerfile
-FROM ghcr.io/qhkm/hmanlab:latest
+FROM ghcr.io/Zen0space/hmanlab:latest
 
 COPY config.json /root/.hmanlab/config.json
 
@@ -63,7 +63,7 @@ For multi-service setups:
 version: '3.8'
 services:
   hmanlab:
-    image: ghcr.io/qhkm/hmanlab:latest
+    image: ghcr.io/Zen0space/hmanlab:latest
     restart: unless-stopped
     environment:
       - HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=${ANTHROPIC_KEY}
@@ -89,7 +89,7 @@ app = "my-hmanlab"
 primary_region = "sin"
 
 [build]
-  image = "ghcr.io/qhkm/hmanlab:latest"
+  image = "ghcr.io/Zen0space/hmanlab:latest"
 
 [env]
   RUST_LOG = "info"

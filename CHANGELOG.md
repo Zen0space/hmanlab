@@ -215,9 +215,9 @@ First public release.
 - Mount allowlist validation
 - Cron job caps and spawn recursion prevention
 
-[0.6.0]: https://github.com/qhkm/hmanlab/releases/tag/v0.6.0
-[0.5.9]: https://github.com/qhkm/hmanlab/releases/tag/v0.5.9
-[0.5.8]: https://github.com/qhkm/hmanlab/releases/tag/v0.5.8
-[0.5.0]: https://github.com/qhkm/hmanlab/releases/tag/v0.5.0
-[0.4.0]: https://github.com/qhkm/hmanlab/releases/tag/v0.4.0
-[0.2.0]: https://github.com/qhkm/hmanlab/releases/tag/v0.2.0
+[0.6.0]: https://github.com/Zen0space/hmanlab/releases/tag/v0.6.0
+[0.5.9]: https://github.com/Zen0space/hmanlab/releases/tag/v0.5.9
+[0.5.8]: https://github.com/Zen0space/hmanlab/releases/tag/v0.5.8
+[0.5.0]: https://github.com/Zen0space/hmanlab/releases/tag/v0.5.0
+[0.4.0]: https://github.com/Zen0space/hmanlab/releases/tag/v0.4.0
+[0.2.0]: https://github.com/Zen0space/hmanlab/releases/tag/v0.2.0

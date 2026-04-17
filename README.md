@@ -9,8 +9,8 @@
   <a href="https://hmanlab.com/docs/"><img src="https://img.shields.io/badge/docs-hmanlab.com-3b82f6?style=for-the-badge&logo=bookstack&logoColor=white" alt="Documentation"></a>
 </p>
 <p align="center">
-  <a href="https://github.com/qhkm/hmanlab/actions/workflows/ci.yml"><img src="https://github.com/qhkm/hmanlab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/qhkm/hmanlab/releases/latest"><img src="https://img.shields.io/github/v/release/qhkm/hmanlab?color=blue" alt="Release"></a>
+  <a href="https://github.com/Zen0space/hmanlab/actions/workflows/ci.yml"><img src="https://github.com/Zen0space/hmanlab/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Zen0space/hmanlab/releases/latest"><img src="https://img.shields.io/github/v/release/Zen0space/hmanlab?color=blue" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License"></a>
 </p>
 
@@ -83,16 +83,16 @@ Every layer runs by default. No flags to remember, no config to enable.
 
 ```bash
 # One-liner (macOS / Linux)
-curl -fsSL https://raw.githubusercontent.com/qhkm/hmanlab/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Zen0space/hmanlab/main/install.sh | sh
 
 # Homebrew
-brew install qhkm/tap/hmanlab
+brew install Zen0space/tap/hmanlab
 
 # Docker
-docker pull ghcr.io/qhkm/hmanlab:latest
+docker pull ghcr.io/Zen0space/hmanlab:latest
 
 # Build from source
-cargo install hmanlab --git https://github.com/qhkm/hmanlab
+cargo install hmanlab --git https://github.com/Zen0space/hmanlab
 ```
 
 The control panel is an optional compile-time feature. To use `hmanlab panel` or
@@ -108,7 +108,7 @@ hmanlab uninstall --yes
 hmanlab uninstall --remove-binary --yes
 
 # Package-managed installs still use their package manager
-brew uninstall qhkm/tap/hmanlab
+brew uninstall Zen0space/tap/hmanlab
 cargo uninstall hmanlab
 ```
 
@@ -167,9 +167,9 @@ Supports JSON and JSON5 config files (comments, trailing commas, unquoted keys).
 ## Deploy
 
 <p align="center">
-  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/qhkm/hmanlab/tree/main"><img src="https://img.shields.io/badge/DigitalOcean-0080FF?style=for-the-badge&logo=digitalocean&logoColor=white" alt="Deploy to DigitalOcean"></a>
-  <a href="https://railway.com/deploy?template=https://github.com/qhkm/hmanlab"><img src="https://img.shields.io/badge/Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white" alt="Deploy to Railway"></a>
-  <a href="https://render.com/deploy?repo=https://github.com/qhkm/hmanlab"><img src="https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white" alt="Deploy to Render"></a>
+  <a href="https://cloud.digitalocean.com/apps/new?repo=https://github.com/Zen0space/hmanlab/tree/main"><img src="https://img.shields.io/badge/DigitalOcean-0080FF?style=for-the-badge&logo=digitalocean&logoColor=white" alt="Deploy to DigitalOcean"></a>
+  <a href="https://railway.com/deploy?template=https://github.com/Zen0space/hmanlab"><img src="https://img.shields.io/badge/Railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white" alt="Deploy to Railway"></a>
+  <a href="https://render.com/deploy?repo=https://github.com/Zen0space/hmanlab"><img src="https://img.shields.io/badge/Render-46E3B7?style=for-the-badge&logo=render&logoColor=white" alt="Deploy to Render"></a>
   <a href="https://fly.io/docs/hands-on/"><img src="https://img.shields.io/badge/Fly.io-6E42C1?style=for-the-badge&logo=fly.io&logoColor=white" alt="Deploy to Fly.io"></a>
 </p>
 
@@ -336,7 +336,7 @@ HmanLab       — LLM calls, tool use, artifact production
 | **HmanLabPM** | [qhkm/zeptopm](https://github.com/qhkm/zeptopm) | Process manager — config-driven daemon, HTTP API, pipelines, orchestration |
 | **HmanLabCapsule** | [qhkm/zeptocapsule](https://github.com/qhkm/zeptocapsule) | Sandbox — process/namespace/Firecracker isolation, resource limits, fallback chains |
 | **HmanLabRT** | [qhkm/zeptort](https://github.com/qhkm/zeptort) | Durable runtime — journaled effects, snapshot recovery, OTP-style supervision |
-| **HmanLab** | [qhkm/hmanlab](https://github.com/qhkm/hmanlab) | Agent framework — 33 tools, 16 providers, 11 channels, container isolation |
+| **HmanLab** | [Zen0space/hmanlab](https://github.com/Zen0space/hmanlab) | Agent framework — 33 tools, 16 providers, 11 channels, container isolation |
 
 ## Contributing
 

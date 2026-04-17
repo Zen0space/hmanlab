@@ -16,7 +16,7 @@
 #   - Own resource limits (CPU, memory)
 
 x-hmanlab-defaults: &defaults
-  image: hmanlab:latest
+  image: ghcr.io/zen0space/hmanlab:latest
   restart: unless-stopped
   logging:
     driver: json-file
@@ -39,7 +39,7 @@ services:
   # =========================================================================
   tenant-shop-ahmad:
     <<: *defaults
-    container_name: zc-shop-ahmad
+    container_name: hmanlab-shop-ahmad
     volumes:
       - shop-ahmad-data:/data
       - ./tenants/shop-ahmad/config.json:/data/config.json:ro
@@ -65,7 +65,7 @@ services:
   # =========================================================================
   tenant-shop-fatimah:
     <<: *defaults
-    container_name: zc-shop-fatimah
+    container_name: hmanlab-shop-fatimah
     volumes:
       - shop-fatimah-data:/data
       - ./tenants/shop-fatimah/config.json:/data/config.json:ro
@@ -91,7 +91,7 @@ services:
   # =========================================================================
   tenant-shop-ali:
     <<: *defaults
-    container_name: zc-shop-ali
+    container_name: hmanlab-shop-ali
     volumes:
       - shop-ali-data:/data
       - ./tenants/shop-ali/config.json:/data/config.json:ro
@@ -114,7 +114,7 @@ services:
   # =========================================================================
   # Add more tenants by copying a block above and changing:
   #   1. Service name:     tenant-<name>
-  #   2. Container name:   zc-<name>
+  #   2. Container name:   hmanlab-<name>
   #   3. Volume names:     <name>-data
   #   4. Config path:      ./tenants/<name>/config.json
   #   5. Labels:           com.hmanlab.tenant: <name>

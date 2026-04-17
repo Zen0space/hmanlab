@@ -16,7 +16,7 @@ HmanLab is distributed as a single static binary. Choose the installation method
 ## Install with script (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/qhkm/hmanlab/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Zen0space/hmanlab/main/install.sh | sh
 ```
 
 This downloads the latest release binary for your platform and places it in your PATH.
@@ -24,7 +24,7 @@ This downloads the latest release binary for your platform and places it in your
 ## Install with Homebrew (macOS/Linux)
 
 ```bash
-brew install qhkm/tap/hmanlab
+brew install Zen0space/tap/hmanlab
 ```
 
 ## Install with Cargo
@@ -32,7 +32,7 @@ brew install qhkm/tap/hmanlab
 Build from source using Rust's package manager:
 
 ```bash
-cargo install hmanlab --git https://github.com/qhkm/hmanlab
+cargo install hmanlab --git https://github.com/Zen0space/hmanlab
 ```
 
 ## Docker
@@ -40,33 +40,33 @@ cargo install hmanlab --git https://github.com/qhkm/hmanlab
 Run HmanLab in a container:
 
 ```bash
-docker pull ghcr.io/qhkm/hmanlab:latest
+docker pull ghcr.io/Zen0space/hmanlab:latest
 
 # Run agent mode
-docker run --rm ghcr.io/qhkm/hmanlab:latest agent -m "Hello"
+docker run --rm ghcr.io/Zen0space/hmanlab:latest agent -m "Hello"
 
 # Run gateway mode with config
 docker run -d \
   -v ~/.hmanlab:/root/.hmanlab \
   -e HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=sk-... \
-  ghcr.io/qhkm/hmanlab:latest gateway
+  ghcr.io/Zen0space/hmanlab:latest gateway
 ```
 
 ## Download binary
 
-Pre-built binaries are available on the [releases page](https://github.com/qhkm/hmanlab/releases):
+Pre-built binaries are available on the [releases page](https://github.com/Zen0space/hmanlab/releases):
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/qhkm/hmanlab/releases/latest/download/hmanlab-linux-x86_64 -o hmanlab
+curl -L https://github.com/Zen0space/hmanlab/releases/latest/download/hmanlab-linux-x86_64 -o hmanlab
 chmod +x hmanlab
 
 # macOS (Apple Silicon)
-curl -L https://github.com/qhkm/hmanlab/releases/latest/download/hmanlab-macos-aarch64 -o hmanlab
+curl -L https://github.com/Zen0space/hmanlab/releases/latest/download/hmanlab-macos-aarch64 -o hmanlab
 chmod +x hmanlab
 
 # macOS (Intel)
-curl -L https://github.com/qhkm/hmanlab/releases/latest/download/hmanlab-macos-x86_64 -o hmanlab
+curl -L https://github.com/Zen0space/hmanlab/releases/latest/download/hmanlab-macos-x86_64 -o hmanlab
 chmod +x hmanlab
 ```
 
@@ -75,7 +75,7 @@ chmod +x hmanlab
 To build from source, you need Rust 1.70+:
 
 ```bash
-git clone https://github.com/qhkm/hmanlab.git
+git clone https://github.com/Zen0space/hmanlab.git
 cd hmanlab
 
 # Build release binary (~4MB)
@@ -109,7 +109,7 @@ hmanlab uninstall --remove-binary --yes
 If you installed HmanLab with a package manager, remove the binary with the same tool:
 
 ```bash
-brew uninstall qhkm/tap/hmanlab
+brew uninstall Zen0space/tap/hmanlab
 cargo uninstall hmanlab
 ```
 

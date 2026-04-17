@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
 
-REPO="qhkm/hmanlab"
+REPO="Zen0space/hmanlab"
 BINARY="hmanlab"
+DOCKER_IMAGE="hmanlab/hmanlab:latest"
 
 # --- Detect platform ---
 

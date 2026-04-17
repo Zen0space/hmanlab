@@ -54,7 +54,7 @@ for dir in "$TENANTS_DIR"/*/; do
     cat << EOF
   tenant-$name:
     <<: *defaults
-    container_name: zc-$name
+    container_name: hmanlab-$name
     volumes:
       - ${name}-data:/data
       - ./tenants/$name/config.json:/data/config.json:ro

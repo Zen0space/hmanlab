@@ -26,14 +26,14 @@ cargo fmt --check
 
 ```bash
 # One-time setup: add upstream remote
-git remote add upstream https://github.com/qhkm/hmanlab.git
+git remote add upstream https://github.com/Zen0space/hmanlab.git
 
 # Start every new feature branch from upstream
 git fetch upstream
 git checkout -b feat/my-feature upstream/main
 # ... work ...
 git push origin feat/my-feature
-# Open PR against qhkm/hmanlab main
+# Open PR against Zen0space/hmanlab main
 ```
 
 **Do not** merge your feature branches into your fork's `main`. Keep your fork's `main` as a clean mirror of upstream:
