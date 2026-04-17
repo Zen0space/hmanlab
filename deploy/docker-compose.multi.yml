@@ -16,7 +16,7 @@
 #   - Own resource limits (CPU, memory)
 
 x-hmanlab-defaults: &defaults
-  image: hmanlab/hmanlab:latest
+  image: ghcr.io/zen0space/hmanlab:latest
   restart: unless-stopped
   logging:
     driver: json-file

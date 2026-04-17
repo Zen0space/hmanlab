@@ -8,13 +8,13 @@ set -eu
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-REPO="qhkm/hmanlab"
+REPO="Zen0space/hmanlab"
 BINARY="hmanlab"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="${HOME}/.hmanlab"
 SERVICE_NAME="hmanlab"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-DOCKER_IMAGE="hmanlab/hmanlab:latest"
+DOCKER_IMAGE="ghcr.io/zen0space/hmanlab:latest"
 CONTAINER_NAME="hmanlab"
 
 # ─── Colors (only if terminal) ───────────────────────────────────────────────

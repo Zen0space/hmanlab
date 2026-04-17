@@ -8,9 +8,9 @@ Pre-built templates for deploying HmanLab to various platforms.
 
 | Platform | Method |
 |----------|--------|
-| DigitalOcean | [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/qhkm/hmanlab/tree/main) |
-| Railway | [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy?template=https://github.com/qhkm/hmanlab) |
-| Render | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/qhkm/hmanlab) |
+| DigitalOcean | [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/Zen0space/hmanlab/tree/main) |
+| Railway | [![Deploy on Railway](https://railway.app/button.svg)](https://railway.com/deploy?template=https://github.com/Zen0space/hmanlab) |
+| Render | [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Zen0space/hmanlab) |
 | Fly.io | [Deploy guide](https://fly.io/docs/launch/) with `deploy/fly.toml` |
 
 ### Any VPS
@@ -43,7 +43,7 @@ The simplest deployment — a single Docker container on any VPS.
 
 ```bash
 # 1. Clone and build
-git clone https://github.com/qhkm/hmanlab.git
+git clone https://github.com/Zen0space/hmanlab.git
 cd hmanlab
 docker build -t hmanlab .
 
