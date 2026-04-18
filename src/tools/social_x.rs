@@ -102,7 +102,7 @@ impl Tool for XPostTool {
             return Ok(ToolOutput::error("text is required"));
         }
         if text.len() > 280 {
-            return Ok(ToolOutput::error(&format!(
+            return Ok(ToolOutput::error(format!(
                 "Tweet text is {} characters, exceeds 280 character limit",
                 text.len()
             )));
@@ -127,7 +127,7 @@ impl Tool for XPostTool {
         let resp_body = resp.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            return Ok(ToolOutput::error(&format!(
+            return Ok(ToolOutput::error(format!(
                 "X API error (HTTP {}): {}",
                 status, resp_body
             )));
@@ -143,7 +143,7 @@ impl Tool for XPostTool {
             .as_str()
             .unwrap_or("");
 
-        Ok(ToolOutput::llm_only(&format!(
+        Ok(ToolOutput::llm_only(format!(
             "Tweet posted successfully. ID: {}{}",
             tweet_id,
             if username.is_empty() {
@@ -186,3 +186,4 @@ pub async fn test_x_connection(
         .unwrap_or("unknown");
     Ok(format!("@{}", username))
 }
+

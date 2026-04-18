@@ -156,7 +156,7 @@ impl Tool for ThreadsPostTool {
         let body = resp.text().await.unwrap_or_default();
 
         if !status.is_success() {
-            return Ok(ToolOutput::error(&format!(
+            return Ok(ToolOutput::error(format!(
                 "Threads create failed (HTTP {}): {}",
                 status, body
             )));
@@ -188,7 +188,7 @@ impl Tool for ThreadsPostTool {
         let pub_body = pub_resp.text().await.unwrap_or_default();
 
         if !pub_status.is_success() {
-            return Ok(ToolOutput::error(&format!(
+            return Ok(ToolOutput::error(format!(
                 "Threads publish failed (HTTP {}): {}",
                 pub_status, pub_body
             )));
@@ -199,7 +199,7 @@ impl Tool for ThreadsPostTool {
 
         let media_id = pub_result["id"].as_str().unwrap_or("unknown");
 
-        Ok(ToolOutput::llm_only(&format!(
+        Ok(ToolOutput::llm_only(format!(
             "Posted to Threads successfully. Media ID: {}",
             media_id
         )))
