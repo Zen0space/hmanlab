@@ -104,7 +104,7 @@ async fn cmd_auth_login(provider: Option<String>) -> Result<()> {
 
     let tokens = auth::oauth::run_oauth_flow(&oauth_config, &client_id).await?;
 
-    save_and_print_tokens(&provider, tokens)?;
+    save_and_print_tokens(&provider, tokens, true)?;
 
     Ok(())
 }
@@ -123,7 +123,7 @@ async fn cmd_auth_login_openai() -> Result<()> {
     println!("Checking for Codex CLI credentials...");
     if let Some(tokens) = codex_import::read_codex_credentials() {
         println!("Imported from Codex CLI (~/.codex/auth.json or Keychain)");
-        save_and_print_tokens("openai", tokens)?;
+        save_and_print_tokens("openai", tokens, true)?;
         return Ok(());
     }
 
@@ -143,10 +143,11 @@ async fn cmd_auth_login_openai() -> Result<()> {
     )
     .await?;
 
-    save_and_print_tokens("openai", tokens)?;
+    save_and_print_tokens("openai", tokens, true)?;
     Ok(())
 }
 
+/// Gemini: uses Gemini CLI's public OAuth credentials
 async fn cmd_auth_login_gemini() -> Result<()> {
     println!("Gemini OAuth: authenticating with Google (Gemini Plan / free tier)");
     println!();
@@ -154,14 +155,14 @@ async fn cmd_auth_login_gemini() -> Result<()> {
     // 1. Check for existing Gemini CLI credentials
     if let Some(tokens) = import_gemini_cli_credentials() {
         println!("Imported from Gemini CLI (~/.gemini/oauth_creds.json)");
-        save_and_print_tokens("gemini", tokens)?;
+        save_and_print_tokens("gemini", tokens, true)?;
         return Ok(());
     }
 
     println!("No Gemini CLI credentials found. Starting browser OAuth...");
     println!();
 
-    cmd_auth_login_gemini_oauth().await
+    cmd_auth_login_gemini_oauth(true).await
 }
 
 /// Browser-only Gemini OAuth flow (no CLI credential import).
@@ -169,10 +170,10 @@ async fn cmd_auth_login_gemini() -> Result<()> {
 /// Used by both `auth login gemini` and `onboard` to run the browser-based
 /// OAuth flow when Gemini CLI credentials are not available.
 pub(crate) async fn cmd_auth_login_gemini_only() -> Result<()> {
-    cmd_auth_login_gemini_oauth().await
+    cmd_auth_login_gemini_oauth(false).await
 }
 
-async fn cmd_auth_login_gemini_oauth() -> Result<()> {
+async fn cmd_auth_login_gemini_oauth(print_config_hint: bool) -> Result<()> {
     let oauth_config = auth::provider_oauth_config("gemini").ok_or_else(|| {
         anyhow::anyhow!("Gemini OAuth config not registered in provider_oauth_config()")
     })?;
@@ -215,7 +216,7 @@ async fn cmd_auth_login_gemini_oauth() -> Result<()> {
     };
 
     if is_headless_env() {
-        run_gemini_oauth_manual(&oauth_config, &client_id, &client_secret).await
+        run_gemini_oauth_manual(&oauth_config, &client_id, &client_secret, print_config_hint).await
     } else {
         let tokens = auth::oauth::run_oauth_flow_with_client_secret(
             &oauth_config,
@@ -223,7 +224,7 @@ async fn cmd_auth_login_gemini_oauth() -> Result<()> {
             &client_secret,
         )
         .await?;
-        save_and_print_tokens("gemini", tokens)?;
+        save_and_print_tokens("gemini", tokens, print_config_hint)?;
         Ok(())
     }
 }
@@ -243,10 +244,15 @@ async fn run_gemini_oauth_manual(
     oauth_config: &auth::ProviderOAuthConfig,
     client_id: &str,
     client_secret: &str,
+    print_config_hint: bool,
 ) -> Result<()> {
     let (auth_url, pkce, _state) = auth::oauth::prepare_manual_oauth(oauth_config, client_id);
 
     println!("Headless/VPS environment detected. Using manual code paste.");
+    println!();
+    println!("Before starting, ensure your Google OAuth app is published (not in Testing mode):");
+    println!("  https://console.cloud.google.com/apis/credentials/consent → \"Publish App\"");
+    println!("  If you see \"app hasn't been verified\" or \"access denied\", publish it first.");
     println!();
     println!("1. Open this URL in your browser (phone or laptop):");
     println!();
@@ -288,7 +294,7 @@ async fn run_gemini_oauth_manual(
     )
     .await?;
 
-    save_and_print_tokens("gemini", tokens)?;
+    save_and_print_tokens("gemini", tokens, print_config_hint)?;
     Ok(())
 }
 
@@ -338,7 +344,11 @@ pub(crate) fn import_gemini_cli_credentials() -> Option<auth::OAuthTokenSet> {
 }
 
 /// Save tokens to the encrypted store and print success information.
-fn save_and_print_tokens(provider: &str, tokens: auth::OAuthTokenSet) -> Result<()> {
+fn save_and_print_tokens(
+    provider: &str,
+    tokens: auth::OAuthTokenSet,
+    print_config_hint: bool,
+) -> Result<()> {
     let encryption = hmanlab::security::encryption::resolve_master_key(true)
         .map_err(|e| anyhow::anyhow!("Cannot store tokens without encryption key: {}", e))?;
 
@@ -356,13 +366,14 @@ fn save_and_print_tokens(provider: &str, tokens: auth::OAuthTokenSet) -> Result<
         println!("Refresh token: stored (will auto-refresh before expiry)");
     }
 
-    // Suggest config update
-    println!();
-    println!("To use OAuth tokens automatically, update your config:");
-    println!(
-        r#"  "providers": {{ "{}": {{ "auth_method": "auto" }} }}"#,
-        provider
-    );
+    if print_config_hint {
+        println!();
+        println!("To use OAuth tokens automatically, update your config:");
+        println!(
+            r#"  "providers": {{ "{}": {{ "auth_method": "auto" }} }}"#,
+            provider
+        );
+    }
 
     Ok(())
 }

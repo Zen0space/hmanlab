@@ -130,6 +130,30 @@ pub const KNOWN_MODELS: &[KnownModel] = &[
     },
 ];
 
+/// Return `(model_id, label)` pairs for a given provider.
+///
+/// Pulls from `KNOWN_MODELS` plus any user-configured per-provider models
+/// (deduplicated). Used by the Telegram inline keyboard to populate model
+/// buttons for a selected provider.
+pub fn models_for_provider(
+    provider: &str,
+    configured_models: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut models: Vec<(String, String)> = KNOWN_MODELS
+        .iter()
+        .filter(|km| km.provider == provider)
+        .map(|km| (km.model.to_string(), km.label.to_string()))
+        .collect();
+
+    for (cfg_provider, cfg_model) in configured_models {
+        if cfg_provider == provider && !models.iter().any(|(m, _)| m == cfg_model) {
+            models.push((cfg_model.clone(), cfg_model.clone()));
+        }
+    }
+
+    models
+}
+
 /// Per-chat model override.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelOverride {
