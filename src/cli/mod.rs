@@ -21,6 +21,7 @@ pub mod pair;
 pub mod panel;
 pub mod provider;
 pub mod quota;
+pub mod restart;
 pub mod secrets;
 #[cfg(feature = "panel")]
 pub mod serve;
@@ -229,6 +230,8 @@ enum Commands {
     },
     /// Start supervised daemon (auto-restarts gateway on failure)
     Daemon,
+    /// Restart the running hmanlab gateway/daemon
+    Restart,
     /// Migrate config and skills from an OpenClaw installation
     Migrate {
         /// Path to OpenClaw directory (auto-detected if omitted)
@@ -733,6 +736,9 @@ pub async fn run() -> Result<()> {
         }
         Some(Commands::Daemon) => {
             daemon::cmd_daemon().await?;
+        }
+        Some(Commands::Restart) => {
+            restart::cmd_restart()?;
         }
         Some(Commands::Migrate { from, yes, dry_run }) => {
             migrate::cmd_migrate(from, yes, dry_run).await?;
