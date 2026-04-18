@@ -157,7 +157,7 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Bump**: \`${BUMP}\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- **Tag**: \`v${VERSION}\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Release workflow will now build binaries + Docker image" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Release workflow will now build binaries" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Release skipped (tag already exists)" >> "$GITHUB_STEP_SUMMARY"
           fi

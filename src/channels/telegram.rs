@@ -1520,30 +1520,55 @@ impl Channel for TelegramChannel {
                 }
             }
 
-            if let Err(e) = req.await {
-                error!(
-                    "Failed to send Telegram chunk {}/{}: {}",
+            if let Err(html_err) = req.await {
+                warn!(
+                    "Telegram HTML send failed for chunk {}/{}: {}. Retrying as plain text.",
                     i + 1,
                     chunks.len(),
-                    e
+                    html_err
                 );
-                // Send a plain-text error fallback so the user knows something went wrong.
-                let fallback = format!(
-                    "[Error: message could not be delivered (part {}/{}). Try asking for a shorter response.]",
-                    i + 1,
-                    chunks.len()
-                );
-                let mut fallback_req = bot.send_message(ChatId(chat_id), fallback);
+
+                let plain = strip_html_tags(chunk);
+                let mut plain_req = bot.send_message(ChatId(chat_id), plain);
+
                 if let Some(tid) = thread_id {
-                    fallback_req = fallback_req.message_thread_id(teloxide::types::ThreadId(
+                    plain_req = plain_req.message_thread_id(teloxide::types::ThreadId(
                         teloxide::types::MessageId(tid),
                     ));
                 }
-                let _ = fallback_req.await;
-                return Err(ZeptoError::Channel(format!(
-                    "Failed to send Telegram message: {}",
-                    e
-                )));
+
+                if i == 0 {
+                    if let Some(id) = reply_msg_id {
+                        plain_req = plain_req.reply_parameters(
+                            ReplyParameters::new(MessageId(id)).allow_sending_without_reply(),
+                        );
+                    }
+                }
+
+                if let Err(plain_err) = plain_req.await {
+                    error!(
+                        "Telegram plain-text retry also failed for chunk {}/{}: {}",
+                        i + 1,
+                        chunks.len(),
+                        plain_err
+                    );
+                    let fallback = format!(
+                        "[Error: message could not be delivered (part {}/{}). Try asking for a shorter response.]",
+                        i + 1,
+                        chunks.len()
+                    );
+                    let mut fallback_req = bot.send_message(ChatId(chat_id), fallback);
+                    if let Some(tid) = thread_id {
+                        fallback_req = fallback_req.message_thread_id(teloxide::types::ThreadId(
+                            teloxide::types::MessageId(tid),
+                        ));
+                    }
+                    let _ = fallback_req.await;
+                    return Err(ZeptoError::Channel(format!(
+                        "Failed to send Telegram message (HTML: {}, plain: {})",
+                        html_err, plain_err
+                    )));
+                }
             }
         }
 
@@ -2282,6 +2307,39 @@ mod tests {
         let send_key = chat_id_str.to_string();
 
         assert_eq!(typing_key, send_key);
+    }
+
+    #[test]
+    fn test_plain_text_fallback_strip_preserves_content() {
+        let html = "<b>bold</b> and <i>italic</i> with <code>x &lt; 5</code>";
+        let plain = strip_html_tags(html);
+        assert_eq!(plain, "bold and italic with x < 5");
+        assert!(!plain.contains("<b>"));
+        assert!(!plain.contains("</b>"));
+        assert!(!plain.contains("<i>"));
+        assert!(!plain.contains("<code>"));
+    }
+
+    #[test]
+    fn test_plain_text_fallback_on_chunked_html() {
+        let long_markdown = (0..100)
+            .map(|i| {
+                format!(
+                    "**Line {}** with `code_{}` and [link](https://example.com)",
+                    i, i
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let rendered = render_telegram_html(&long_markdown);
+        let chunks = chunk_message(&rendered, TELEGRAM_MAX_MESSAGE_LEN);
+        for chunk in &chunks {
+            let plain = strip_html_tags(chunk);
+            assert!(!plain.contains("<b>"));
+            assert!(!plain.contains("</b>"));
+            assert!(!plain.contains("<code>"));
+            assert!(!plain.contains("</code>"));
+        }
     }
 
     #[test]
