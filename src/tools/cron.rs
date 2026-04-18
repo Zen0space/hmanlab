@@ -31,11 +31,16 @@ impl Tool for CronTool {
     }
 
     fn description(&self) -> &str {
-        "Schedule reminders and recurring tasks. Actions: add, list, remove."
+        "Schedule recurring tasks that run through the agent with full tool access (web_search, web_fetch, etc). \
+         The message is a prompt the agent executes — write it as an instruction describing what to do. \
+         Examples: 'Search for the latest market news and summarize them', \
+         'Fetch the current weather for London and post a brief report'. \
+         Supports {{date}}, {{time}}, {{datetime}} template variables. \
+         Actions: add, list, remove."
     }
 
     fn compact_description(&self) -> &str {
-        "Schedule task"
+        "Schedule recurring agent task with tool access (web_search, web_fetch, etc)"
     }
 
     fn category(&self) -> ToolCategory {
@@ -53,7 +58,7 @@ impl Tool for CronTool {
                 },
                 "message": {
                     "type": "string",
-                    "description": "Message for add action"
+                    "description": "Prompt the agent will execute when the job fires. Include tool instructions like 'search the web for...' or 'fetch https://...'. Supports {{date}}, {{time}}, {{datetime}}."
                 },
                 "name": {
                     "type": "string",
