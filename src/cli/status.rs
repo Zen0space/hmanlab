@@ -54,6 +54,11 @@ async fn cmd_auth_login(provider: Option<String>) -> Result<()> {
         return cmd_auth_login_openai().await;
     }
 
+    // Gemini: uses Gemini CLI's public OAuth credentials
+    if provider == "gemini" {
+        return cmd_auth_login_gemini().await;
+    }
+
     // All other providers: existing flow (env-var client_id + ephemeral port)
     let oauth_config = auth::provider_oauth_config(&provider).ok_or_else(|| {
         anyhow::anyhow!(
@@ -140,6 +145,81 @@ async fn cmd_auth_login_openai() -> Result<()> {
 
     save_and_print_tokens("openai", tokens)?;
     Ok(())
+}
+
+async fn cmd_auth_login_gemini() -> Result<()> {
+    println!("Gemini OAuth: authenticating with Google (Gemini Plan / free tier)");
+    println!();
+
+    // 1. Check for existing Gemini CLI credentials
+    if let Some(tokens) = import_gemini_cli_credentials() {
+        println!("Imported from Gemini CLI (~/.gemini/oauth_creds.json)");
+        save_and_print_tokens("gemini", tokens)?;
+        return Ok(());
+    }
+
+    println!("No Gemini CLI credentials found. Starting browser OAuth...");
+    println!();
+
+    let oauth_config = auth::provider_oauth_config("gemini").ok_or_else(|| {
+        anyhow::anyhow!("Gemini OAuth config not registered in provider_oauth_config()")
+    })?;
+
+    let client_id = std::env::var("HMANLAB_GEMINI_OAUTH_CLIENT_ID")
+        .or_else(|_| std::env::var("GEMINI_CLIENT_ID"))
+        .map_err(|_| anyhow::anyhow!(
+            "Gemini OAuth client_id required. Set HMANLAB_GEMINI_OAUTH_CLIENT_ID or install Gemini CLI (credentials auto-imported from ~/.gemini/)"
+        ))?;
+    let client_secret = std::env::var("HMANLAB_GEMINI_OAUTH_CLIENT_SECRET")
+        .or_else(|_| std::env::var("GEMINI_CLIENT_SECRET"))
+        .map_err(|_| anyhow::anyhow!(
+            "Gemini OAuth client_secret required. Set HMANLAB_GEMINI_OAUTH_CLIENT_SECRET"
+        ))?;
+
+    let tokens = auth::oauth::run_oauth_flow_with_client_secret(
+        &oauth_config,
+        &client_id,
+        &client_secret,
+    )
+    .await?;
+
+    save_and_print_tokens("gemini", tokens)?;
+    Ok(())
+}
+
+fn import_gemini_cli_credentials() -> Option<auth::OAuthTokenSet> {
+    let home = dirs::home_dir()?;
+    let path = home.join(".gemini/oauth_creds.json");
+    let data = std::fs::read_to_string(path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&data).ok()?;
+
+    let access_token = json["access_token"]
+        .as_str()
+        .or_else(|| json["token"].as_str())?
+        .to_string();
+
+    let refresh_token = json["refresh_token"].as_str().map(String::from);
+
+    let expires_at = json
+        .get("expiry_date")
+        .and_then(|v| v.as_i64())
+        .or_else(|| {
+            json.get("expiry")
+                .and_then(|v| v.as_str())
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.timestamp_millis())
+        });
+
+    Some(auth::OAuthTokenSet {
+        provider: "gemini".to_string(),
+        access_token,
+        refresh_token,
+        token_type: "Bearer".to_string(),
+        expires_at,
+        scope: None,
+        obtained_at: chrono::Utc::now().timestamp(),
+        client_id: None,
+    })
 }
 
 /// Save tokens to the encrypted store and print success information.

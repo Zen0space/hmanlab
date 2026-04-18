@@ -563,9 +563,141 @@ pub async fn run_oauth_flow_with_port(
     Ok(tokens)
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
+/// Exchange an authorization code for tokens, including `client_secret`.
+///
+/// Some providers (e.g. Google/Gemini CLI) use installed-app credentials that
+/// include a client secret. Google's docs confirm this is safe for installed apps.
+pub async fn exchange_code_with_secret(
+    config: &ProviderOAuthConfig,
+    code: &str,
+    code_verifier: &str,
+    redirect_uri: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<OAuthTokenSet> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| ZeptoError::Config(format!("Failed to create HTTP client: {}", e)))?;
+
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("code_verifier", code_verifier),
+    ];
+
+    let resp = client
+        .post(&config.token_url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| ZeptoError::Config(format!("Token exchange request failed: {}", e)))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        return Err(ZeptoError::Config(format!(
+            "Token exchange failed (HTTP {}): {}",
+            status, body
+        )));
+    }
+
+    let token_resp: TokenResponse = serde_json::from_str(&body).map_err(|e| {
+        ZeptoError::Config(format!(
+            "Failed to parse token response: {} — body: {}",
+            e, body
+        ))
+    })?;
+
+    let now = chrono::Utc::now().timestamp();
+    let expires_at = token_resp.expires_in.map(|secs| now + secs);
+
+    Ok(OAuthTokenSet {
+        provider: config.provider.clone(),
+        access_token: token_resp.access_token,
+        refresh_token: token_resp.refresh_token,
+        expires_at,
+        token_type: token_resp
+            .token_type
+            .unwrap_or_else(|| "Bearer".to_string()),
+        scope: token_resp.scope,
+        obtained_at: now,
+        client_id: Some(client_id.to_string()),
+    })
+}
+
+/// Run the OAuth flow with a client secret (for installed-app credentials).
+///
+/// Works the same as [`run_oauth_flow`] but passes `client_secret` during the
+/// token exchange. Used by providers like Gemini where the CLI ships public
+/// installed-app credentials.
+pub async fn run_oauth_flow_with_client_secret(
+    config: &ProviderOAuthConfig,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<OAuthTokenSet> {
+    let pkce = PkceChallenge::generate();
+    let state = generate_csrf_state();
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|e| ZeptoError::Config(format!("Failed to bind callback server: {}", e)))?;
+
+    let port = listener
+        .local_addr()
+        .map_err(|e| ZeptoError::Config(format!("Failed to get callback port: {}", e)))?
+        .port();
+
+    let redirect_uri = format!("http://127.0.0.1:{}/oauth/callback", port);
+    let auth_url = build_authorize_url(config, client_id, &redirect_uri, &pkce, &state);
+
+    if is_headless() {
+        println!("Headless/VPS environment detected.");
+        println!();
+        println!("To complete authentication, run on your LOCAL machine:");
+        println!("  ssh -L {}:localhost:{} <user>@<your-host>", port, port);
+        println!("Then visit this URL in your local browser:");
+        println!("  {}", auth_url);
+    } else {
+        println!("Opening browser for {} authentication...", config.provider);
+        println!();
+        println!("If the browser doesn't open, visit this URL manually:");
+        println!("  {}", auth_url);
+        open_browser(&auth_url)?;
+    }
+    println!();
+    println!("Waiting for authentication (timeout: 120s)...");
+
+    let callback = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        accept_callback(&listener),
+    )
+    .await
+    .map_err(|_| {
+        ZeptoError::Config(
+            "OAuth callback timed out after 120s. Did you complete the browser sign-in?".into(),
+        )
+    })??;
+
+    validate_oauth_state(callback.state.as_deref(), &state)?;
+
+    println!("Exchanging authorization code for tokens...");
+    let tokens = exchange_code_with_secret(
+        config,
+        &callback.code,
+        &pkce.code_verifier,
+        &redirect_uri,
+        client_id,
+        client_secret,
+    )
+    .await?;
+
+    Ok(tokens)
+}
 
 #[cfg(test)]
 mod tests {

@@ -208,13 +208,24 @@ pub fn provider_oauth_config(provider: &str) -> Option<ProviderOAuthConfig> {
                 "profile".to_string(),
             ],
         }),
+        "gemini" => Some(ProviderOAuthConfig {
+            provider: "gemini".to_string(),
+            token_url: "https://oauth2.googleapis.com/token".to_string(),
+            authorize_url: "https://accounts.google.com/o/oauth2/v2/auth".to_string(),
+            client_name: "HmanLab".to_string(),
+            scopes: vec![
+                "https://www.googleapis.com/auth/cloud-platform".to_string(),
+                "https://www.googleapis.com/auth/userinfo.email".to_string(),
+                "https://www.googleapis.com/auth/userinfo.profile".to_string(),
+            ],
+        }),
         _ => None,
     }
 }
 
 /// Returns a list of providers that support OAuth authentication.
 pub fn oauth_supported_providers() -> &'static [&'static str] {
-    &["anthropic", "google", "openai"]
+    &["anthropic", "google", "openai", "gemini"]
 }
 
 // ============================================================================
@@ -415,6 +426,22 @@ mod tests {
         assert!(
             providers.contains(&"openai"),
             "openai must be in oauth_supported_providers"
+        );
+    }
+
+    #[test]
+    fn test_provider_oauth_config_gemini() {
+        let config = provider_oauth_config("gemini").expect("gemini should have OAuth config");
+        assert_eq!(config.provider, "gemini");
+        assert!(config.scopes.iter().any(|s| s.contains("cloud-platform")));
+    }
+
+    #[test]
+    fn test_oauth_supported_providers_includes_gemini() {
+        let providers = oauth_supported_providers();
+        assert!(
+            providers.contains(&"gemini"),
+            "gemini must be in oauth_supported_providers"
         );
     }
 }
