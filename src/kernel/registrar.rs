@@ -436,14 +436,12 @@ pub async fn register_all_tools(
                         && !at.trim().is_empty()
                         && !ats.trim().is_empty()
                     {
-                        registry.register(Box::new(
-                            crate::tools::social_x::XPostTool::new(
-                                ak.trim(),
-                                as_.trim(),
-                                at.trim(),
-                                ats.trim(),
-                            ),
-                        ));
+                        registry.register(Box::new(crate::tools::social_x::XPostTool::new(
+                            ak.trim(),
+                            as_.trim(),
+                            at.trim(),
+                            ats.trim(),
+                        )));
                         info!("Registered post_x tool");
                     }
                 }

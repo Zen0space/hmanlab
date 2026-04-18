@@ -39,12 +39,17 @@ fn automation_setup() -> Result<()> {
     } else {
         "not configured"
     };
-    let threads_status =
-        if config.tools.threads.as_ref().map(|c| c.enabled).unwrap_or(false) {
-            "configured"
-        } else {
-            "not configured"
-        };
+    let threads_status = if config
+        .tools
+        .threads
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false)
+    {
+        "configured"
+    } else {
+        "not configured"
+    };
     println!("  X (Twitter):    {}", x_status);
     println!("  Threads:       {}", threads_status);
     println!();
@@ -113,7 +118,11 @@ fn setup_x(config: &mut Config) -> Result<()> {
     io::stdout().flush()?;
     let access_token_secret = read_secret()?;
 
-    if !api_key.is_empty() && !api_secret.is_empty() && !access_token.is_empty() && !access_token_secret.is_empty() {
+    if !api_key.is_empty()
+        && !api_secret.is_empty()
+        && !access_token.is_empty()
+        && !access_token_secret.is_empty()
+    {
         let x_cfg = config.tools.x.get_or_insert_with(Default::default);
         x_cfg.enabled = true;
         x_cfg.api_key = Some(api_key);
@@ -167,11 +176,30 @@ fn automation_status() -> Result<()> {
     println!();
 
     let x_enabled = config.tools.x.as_ref().map(|c| c.enabled).unwrap_or(false);
-    let threads_enabled = config.tools.threads.as_ref().map(|c| c.enabled).unwrap_or(false);
+    let threads_enabled = config
+        .tools
+        .threads
+        .as_ref()
+        .map(|c| c.enabled)
+        .unwrap_or(false);
 
     println!("Configured platforms:");
-    println!("  X (Twitter):    {}", if x_enabled { "✓ configured" } else { "✗ not configured" });
-    println!("  Threads:       {}", if threads_enabled { "✓ configured" } else { "✗ not configured" });
+    println!(
+        "  X (Twitter):    {}",
+        if x_enabled {
+            "✓ configured"
+        } else {
+            "✗ not configured"
+        }
+    );
+    println!(
+        "  Threads:       {}",
+        if threads_enabled {
+            "✓ configured"
+        } else {
+            "✗ not configured"
+        }
+    );
     println!();
 
     if !x_enabled && !threads_enabled {

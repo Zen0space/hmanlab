@@ -549,31 +549,32 @@ pub(crate) async fn cmd_onboard(full: bool) -> Result<()> {
             println!("  Skipped. Run 'hmanlab channel setup <name>' anytime.");
         }
 
-    // Step 5: Automation (Social Media)
-    println!();
-    println!("Automation Setup");
-    println!("================");
-    println!("Connect social media accounts to allow your agent to post autonomously.");
-    println!("  1. Set up X (Twitter) & Threads");
-    println!("  2. Skip");
-    println!();
-    print!("Choice [2]: ");
-    io::stdout().flush()?;
-    let auto_choice = read_line()?;
-    if auto_choice.trim() == "1" {
-        crate::cli::automation::cmd_automation(crate::cli::automation::AutomationAction::Setup).await?;
-    } else {
-        println!("  Skipped. Run 'hmanlab automation setup' anytime.");
+        // Step 5: Automation (Social Media)
+        println!();
+        println!("Automation Setup");
+        println!("================");
+        println!("Connect social media accounts to allow your agent to post autonomously.");
+        println!("  1. Set up X (Twitter) & Threads");
+        println!("  2. Skip");
+        println!();
+        print!("Choice [2]: ");
+        io::stdout().flush()?;
+        let auto_choice = read_line()?;
+        if auto_choice.trim() == "1" {
+            crate::cli::automation::cmd_automation(crate::cli::automation::AutomationAction::Setup)
+                .await?;
+        } else {
+            println!("  Skipped. Run 'hmanlab automation setup' anytime.");
+        }
+
+        // Save config
+        config
+            .save()
+            .with_context(|| "Failed to save configuration")?;
+
+        // Print guided next steps
+        println!("{}", express_next_steps());
     }
-
-    // Save config
-    config
-        .save()
-        .with_context(|| "Failed to save configuration")?;
-
-    // Print guided next steps
-    println!("{}", express_next_steps());
-}
 
     Ok(())
 }

@@ -47,13 +47,9 @@ impl XPostTool {
         Ok((k, s, t, ts))
     }
 
-    fn build_oauth_header(
-        &self,
-        method: &str,
-        url: &str,
-    ) -> String {
-        use oauth_credentials::{Credentials, Token};
+    fn build_oauth_header(&self, method: &str, url: &str) -> String {
         use oauth1_request::signature_method::HmacSha1;
+        use oauth_credentials::{Credentials, Token};
 
         let client = Credentials::new(self.api_key.trim(), self.api_secret.trim());
         let token = Credentials::new(self.access_token.trim(), self.access_token_secret.trim());
@@ -136,9 +132,7 @@ impl Tool for XPostTool {
         let result: Value = serde_json::from_str(&resp_body)
             .map_err(|e| ZeptoError::Tool(format!("Failed to parse X response: {}", e)))?;
 
-        let tweet_id = result["data"]["id"]
-            .as_str()
-            .unwrap_or("unknown");
+        let tweet_id = result["data"]["id"].as_str().unwrap_or("unknown");
         let username = result["includes"]["users"][0]["username"]
             .as_str()
             .unwrap_or("");
@@ -181,9 +175,6 @@ pub async fn test_x_connection(
     }
 
     let me: Value = serde_json::from_str(&body).unwrap_or_default();
-    let username = me["data"]["username"]
-        .as_str()
-        .unwrap_or("unknown");
+    let username = me["data"]["username"].as_str().unwrap_or("unknown");
     Ok(format!("@{}", username))
 }
-

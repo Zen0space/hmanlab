@@ -29,7 +29,9 @@ impl ThreadsPostTool {
         let user_id = self.user_id.trim();
         let token = self.access_token.trim();
         if user_id.is_empty() {
-            return Err(ZeptoError::Config("Threads user_id is not configured".into()));
+            return Err(ZeptoError::Config(
+                "Threads user_id is not configured".into(),
+            ));
         }
         if token.is_empty() {
             return Err(ZeptoError::Config(
@@ -91,17 +93,12 @@ impl Tool for ThreadsPostTool {
     async fn execute(&self, args: Value, _ctx: &ToolContext) -> Result<ToolOutput> {
         let (user_id, token) = self.validate_credentials()?;
 
-        let text = args["text"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
+        let text = args["text"].as_str().unwrap_or("").to_string();
         if text.is_empty() {
             return Ok(ToolOutput::error("text is required"));
         }
 
-        let media_type = args["media_type"]
-            .as_str()
-            .unwrap_or("TEXT");
+        let media_type = args["media_type"].as_str().unwrap_or("TEXT");
         let image_url = args["image_url"].as_str().unwrap_or("");
         let video_url = args["video_url"].as_str().unwrap_or("");
         let link_attachment = args["link_attachment"].as_str().unwrap_or("");
@@ -162,13 +159,10 @@ impl Tool for ThreadsPostTool {
             )));
         }
 
-        let container_id: Value =
-            serde_json::from_str(&body).map_err(|e| ZeptoError::Tool(format!("Failed to parse Threads response: {}", e)))?;
+        let container_id: Value = serde_json::from_str(&body)
+            .map_err(|e| ZeptoError::Tool(format!("Failed to parse Threads response: {}", e)))?;
 
-        let id = container_id["id"]
-            .as_str()
-            .unwrap_or("unknown")
-            .to_string();
+        let id = container_id["id"].as_str().unwrap_or("unknown").to_string();
 
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
@@ -194,8 +188,9 @@ impl Tool for ThreadsPostTool {
             )));
         }
 
-        let pub_result: Value = serde_json::from_str(&pub_body)
-            .map_err(|e| ZeptoError::Tool(format!("Failed to parse Threads publish response: {}", e)))?;
+        let pub_result: Value = serde_json::from_str(&pub_body).map_err(|e| {
+            ZeptoError::Tool(format!("Failed to parse Threads publish response: {}", e))
+        })?;
 
         let media_id = pub_result["id"].as_str().unwrap_or("unknown");
 
