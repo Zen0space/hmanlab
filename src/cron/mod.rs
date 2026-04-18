@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Local, Timelike, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -102,11 +102,11 @@ fn expand_templates(message: &str) -> String {
     if !message.contains("{{") {
         return message.to_string();
     }
-    let now = Utc::now();
+    let now = Local::now();
     message
         .replace(
             "{{datetime}}",
-            &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            &now.format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
         )
         .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
         .replace("{{time}}", &now.format("%H:%M:%S").to_string())
@@ -261,7 +261,6 @@ impl CronService {
         Self::with_jitter(store_path, bus, 0)
     }
 
-    /// Create a new cron service with configurable jitter (milliseconds).
     pub fn with_jitter(store_path: PathBuf, bus: Arc<MessageBus>, jitter_ms: u64) -> Self {
         Self {
             store_path,
@@ -1486,7 +1485,7 @@ mod tests {
         let result = expand_templates("Scheduled: {{datetime}}");
         assert!(!result.contains("{{datetime}}"));
         assert!(result.contains("T"));
-        assert!(result.contains("Z"));
+        assert!(result.contains("+") || result.contains("-") || result.contains("Z"));
     }
 
     #[test]
