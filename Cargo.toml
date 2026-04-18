@@ -260,6 +260,8 @@ unicode-normalization = "0.1.25"
 # `providers.vertex` will surface a clear runtime error asking users to rebuild
 # with `--features provider-vertex`.
 google-cloud-auth = { version = "1.7.0", default-features = false, optional = true }
+oauth1-request = "0.6.1"
+oauth-credentials = "0.3.0"
 
 # USB device enumeration — only on platforms nusb supports (Linux, macOS, Windows)
 [target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))'.dependencies]

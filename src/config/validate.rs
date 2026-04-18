@@ -41,6 +41,7 @@ const KNOWN_TOP_LEVEL: &[&str] = &[
     "devices",
     "logging",
     "r8r_bridge",
+    "automation",
 ];
 
 /// Known fields for each section. Nested as section.field.

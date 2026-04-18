@@ -3,6 +3,7 @@
 //! All CLI logic lives here. `main.rs` calls `cli::run()`.
 
 pub mod agent;
+pub mod automation;
 pub mod batch;
 pub mod channel;
 pub mod common;
@@ -232,6 +233,10 @@ enum Commands {
     Daemon,
     /// Restart the running hmanlab gateway/daemon
     Restart,
+    /// Connect social media accounts for auto-posting via cron
+    Automation {
+        action: automation::AutomationAction,
+    },
     /// Migrate config and skills from an OpenClaw installation
     Migrate {
         /// Path to OpenClaw directory (auto-detected if omitted)
@@ -743,6 +748,9 @@ pub async fn run() -> Result<()> {
         }
         Some(Commands::Restart) => {
             restart::cmd_restart()?;
+        }
+        Some(Commands::Automation { action }) => {
+            automation::cmd_automation(action).await?;
         }
         Some(Commands::Migrate { from, yes, dry_run }) => {
             migrate::cmd_migrate(from, yes, dry_run).await?;

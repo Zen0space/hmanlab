@@ -95,6 +95,8 @@ pub mod screenshot;
 pub mod shell;
 pub mod skills_install;
 pub mod skills_search;
+pub mod social_threads;
+pub mod social_x;
 pub mod spawn;
 pub mod stripe;
 #[cfg(feature = "panel")]
