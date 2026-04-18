@@ -104,9 +104,41 @@ impl Tool for CronTool {
     }
 }
 
+fn enrich_cron_message(message: &str) -> String {
+    static KEYWORDS: &[&str] = &[
+        "search", "fetch", "browse", "check", "monitor", "scrape", "look up", "news", "weather",
+        "price", "stock", "update", "latest", "current", "summary", "report",
+    ];
+
+    let lower = message.to_lowercase();
+    let needs_tools = KEYWORDS.iter().any(|kw| lower.contains(kw));
+
+    if !needs_tools {
+        return message.to_string();
+    }
+
+    let already_explicit = lower.contains("use web_search")
+        || lower.contains("use web_fetch")
+        || lower.contains("use the available tools")
+        || lower.contains("use your tools");
+
+    if already_explicit {
+        return format!(
+            "[Scheduled task - execute autonomously, do not ask follow-up questions]\n{}",
+            message
+        );
+    }
+
+    format!(
+        "[Scheduled task - execute autonomously, do not ask follow-up questions]\n{}\n\n\
+         Use the available tools (web_search, web_fetch) to find current and accurate information, \
+         then post a concise summary of your findings.",
+        message
+    )
+}
+
 impl CronTool {
     async fn execute_add(&self, args: Value, ctx: &ToolContext) -> Result<String> {
-        // Max job count
         let existing = self.cron.list_jobs(false).await;
         if existing.len() >= 50 {
             return Err(ZeptoError::Tool(
@@ -115,26 +147,27 @@ impl CronTool {
             ));
         }
 
-        let message = args
+        let raw_message = args
             .get("message")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeptoError::Tool("Missing 'message' for cron add".into()))?;
+
+        let message = enrich_cron_message(raw_message);
 
         let name = args
             .get("name")
             .and_then(|v| v.as_str())
             .map(str::to_string)
             .unwrap_or_else(|| {
-                // Use char_indices for UTF-8 safe truncation
-                if message.chars().count() > 30 {
-                    let end = message
+                if raw_message.chars().count() > 30 {
+                    let end = raw_message
                         .char_indices()
                         .nth(30)
                         .map(|(i, _)| i)
-                        .unwrap_or(message.len());
-                    format!("{}...", &message[..end])
+                        .unwrap_or(raw_message.len());
+                    format!("{}...", &raw_message[..end])
                 } else {
-                    message.to_string()
+                    raw_message.to_string()
                 }
             });
 
@@ -482,5 +515,45 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("No channel available"));
+    }
+
+    #[test]
+    fn test_enrich_cron_message_with_search_keyword() {
+        let result = enrich_cron_message("Fetch the latest market news");
+        assert!(result.starts_with("[Scheduled task - execute autonomously"));
+        assert!(result.contains("Fetch the latest market news"));
+        assert!(result.contains("web_search"));
+        assert!(result.contains("web_fetch"));
+    }
+
+    #[test]
+    fn test_enrich_cron_message_with_stock_keyword() {
+        let result = enrich_cron_message("Check AAPL stock price");
+        assert!(result.starts_with("[Scheduled task - execute autonomously"));
+        assert!(result.contains("Check AAPL stock price"));
+    }
+
+    #[test]
+    fn test_enrich_cron_message_plain_text_unchanged() {
+        let msg = "Send a good morning greeting";
+        let result = enrich_cron_message(msg);
+        assert_eq!(result, msg);
+    }
+
+    #[test]
+    fn test_enrich_cron_message_already_has_tool_instruction() {
+        let result = enrich_cron_message("Use web_search to find market news");
+        assert!(result.starts_with("[Scheduled task - execute autonomously"));
+        assert!(result.contains("Use web_search to find market news"));
+        assert!(
+            !result.contains("Use the available tools"),
+            "should not double-add tool instructions"
+        );
+    }
+
+    #[test]
+    fn test_enrich_cron_message_case_insensitive() {
+        let result = enrich_cron_message("GET THE LATEST UPDATES");
+        assert!(result.starts_with("[Scheduled task - execute autonomously"));
     }
 }

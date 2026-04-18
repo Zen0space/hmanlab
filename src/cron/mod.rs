@@ -98,6 +98,20 @@ fn dispatch_timeout_ms(timeout_secs: Option<u64>) -> u64 {
         .unwrap_or(DEFAULT_DISPATCH_TIMEOUT_MS)
 }
 
+fn expand_templates(message: &str) -> String {
+    if !message.contains("{{") {
+        return message.to_string();
+    }
+    let now = Utc::now();
+    message
+        .replace(
+            "{{datetime}}",
+            &now.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        )
+        .replace("{{date}}", &now.format("%Y-%m-%d").to_string())
+        .replace("{{time}}", &now.format("%H:%M:%S").to_string())
+}
+
 fn should_skip_missed_dispatch(job: &CronJob, next_run_at_ms: i64) -> bool {
     let Some(last_run_at_ms) = job.state.last_run_at_ms else {
         return false;
@@ -486,11 +500,12 @@ async fn tick(
     let mut results: Vec<(String, bool, Option<String>, i64, i64)> = Vec::new();
     for job in &due_jobs {
         let started_at = now_ms();
+        let expanded = expand_templates(&job.payload.message);
         let inbound = InboundMessage::new(
             &job.payload.channel,
             "cron",
             &job.payload.chat_id,
-            &job.payload.message,
+            &expanded,
         );
         if jitter_ms > 0 {
             tokio::time::sleep(jitter_delay(jitter_ms)).await;
@@ -1449,5 +1464,42 @@ mod tests {
             Some(45),
             "timeout_secs should survive store reload"
         );
+    }
+
+    #[test]
+    fn test_expand_templates_replaces_date() {
+        let result = expand_templates("Report for {{date}}");
+        assert!(!result.contains("{{date}}"));
+        assert!(result.contains("20"));
+        assert!(result.starts_with("Report for "));
+    }
+
+    #[test]
+    fn test_expand_templates_replaces_time() {
+        let result = expand_templates("Run at {{time}}");
+        assert!(!result.contains("{{time}}"));
+        assert!(result.contains(":"));
+    }
+
+    #[test]
+    fn test_expand_templates_replaces_datetime() {
+        let result = expand_templates("Scheduled: {{datetime}}");
+        assert!(!result.contains("{{datetime}}"));
+        assert!(result.contains("T"));
+        assert!(result.contains("Z"));
+    }
+
+    #[test]
+    fn test_expand_templates_no_templates_unchanged() {
+        let msg = "Just a regular message";
+        assert_eq!(expand_templates(msg), msg);
+    }
+
+    #[test]
+    fn test_expand_templates_multiple_replacements() {
+        let result = expand_templates("{{date}} at {{time}}: {{datetime}}");
+        assert!(!result.contains("{{"));
+        assert!(result.contains(" at "));
+        assert!(result.contains(": "));
     }
 }
