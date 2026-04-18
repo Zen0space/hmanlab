@@ -190,13 +190,20 @@ impl GeminiProvider {
         DEFAULT_GEMINI_MODEL
     }
 
-    pub fn from_config(api_key: Option<&str>, model: &str, prefer_oauth: bool) -> Option<Self> {
+    pub fn from_config(
+        api_key: Option<&str>,
+        model: &str,
+        prefer_oauth: bool,
+        direct_bearer: Option<&str>,
+    ) -> Option<Self> {
         let env_key = std::env::var("GEMINI_API_KEY")
             .or_else(|_| std::env::var("GOOGLE_API_KEY"))
             .ok();
 
         let oauth_token = if prefer_oauth || api_key.map(str::is_empty).unwrap_or(true) {
-            GeminiAuth::load_cli_token()
+            direct_bearer
+                .map(String::from)
+                .or_else(GeminiAuth::load_cli_token)
         } else {
             None
         };

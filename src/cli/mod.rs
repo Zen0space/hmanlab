@@ -563,6 +563,10 @@ pub enum QuotaSubcommand {
 pub enum ProviderSubcommand {
     /// Show resolved provider chain, wrappers, and configuration
     Status,
+    /// Interactively add a new provider
+    Add,
+    /// List all known providers and their configuration status
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -709,7 +713,7 @@ pub async fn run() -> Result<()> {
             quota::cmd_quota(action)?;
         }
         Some(Commands::Provider { action }) => {
-            provider::cmd_provider(action)?;
+            provider::cmd_provider(action).await?;
         }
         Some(Commands::Panel {
             action,

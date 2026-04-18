@@ -161,6 +161,18 @@ async fn cmd_auth_login_gemini() -> Result<()> {
     println!("No Gemini CLI credentials found. Starting browser OAuth...");
     println!();
 
+    cmd_auth_login_gemini_oauth().await
+}
+
+/// Browser-only Gemini OAuth flow (no CLI credential import).
+///
+/// Used by both `auth login gemini` and `onboard` to run the browser-based
+/// OAuth flow when Gemini CLI credentials are not available.
+pub(crate) async fn cmd_auth_login_gemini_only() -> Result<()> {
+    cmd_auth_login_gemini_oauth().await
+}
+
+async fn cmd_auth_login_gemini_oauth() -> Result<()> {
     let oauth_config = auth::provider_oauth_config("gemini").ok_or_else(|| {
         anyhow::anyhow!("Gemini OAuth config not registered in provider_oauth_config()")
     })?;
@@ -172,22 +184,21 @@ async fn cmd_auth_login_gemini() -> Result<()> {
         ))?;
     let client_secret = std::env::var("HMANLAB_GEMINI_OAUTH_CLIENT_SECRET")
         .or_else(|_| std::env::var("GEMINI_CLIENT_SECRET"))
-        .map_err(|_| anyhow::anyhow!(
-            "Gemini OAuth client_secret required. Set HMANLAB_GEMINI_OAUTH_CLIENT_SECRET"
-        ))?;
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Gemini OAuth client_secret required. Set HMANLAB_GEMINI_OAUTH_CLIENT_SECRET"
+            )
+        })?;
 
-    let tokens = auth::oauth::run_oauth_flow_with_client_secret(
-        &oauth_config,
-        &client_id,
-        &client_secret,
-    )
-    .await?;
+    let tokens =
+        auth::oauth::run_oauth_flow_with_client_secret(&oauth_config, &client_id, &client_secret)
+            .await?;
 
     save_and_print_tokens("gemini", tokens)?;
     Ok(())
 }
 
-fn import_gemini_cli_credentials() -> Option<auth::OAuthTokenSet> {
+pub(crate) fn import_gemini_cli_credentials() -> Option<auth::OAuthTokenSet> {
     let home = dirs::home_dir()?;
     let path = home.join(".gemini/oauth_creds.json");
     let data = std::fs::read_to_string(path).ok()?;
