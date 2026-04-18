@@ -68,8 +68,9 @@ const BASE_RETRY_DELAY_SECS: u64 = 2;
 const MAX_RETRY_DELAY_SECS: u64 = 120;
 
 use super::model_switch::{
-    format_current_model, format_model_list, hydrate_overrides, new_override_store,
-    parse_model_command, persist_single, remove_single, ModelCommand, ModelOverrideStore,
+    format_current_model, format_model_list, hydrate_overrides, models_for_provider,
+    new_override_store, parse_model_command, persist_single, remove_single, ModelCommand,
+    ModelOverride, ModelOverrideStore,
 };
 use super::persona_switch::{self, PersonaCommand, PersonaOverrideStore};
 use super::{BaseChannelConfig, Channel};
@@ -956,11 +957,36 @@ impl Channel for TelegramChannel {
                                             };
                                             let reply =
                                                 format_current_model(current.as_ref(), &default_model);
+
+                                            use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+
+                                            let mut provider_buttons: Vec<InlineKeyboardButton> = Vec::new();
+                                            for p in &configured_providers {
+                                                provider_buttons.push(
+                                                    InlineKeyboardButton::callback(
+                                                        p.clone(),
+                                                        format!("model_nav:{}", p),
+                                                    ),
+                                                );
+                                            }
+                                            let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+                                            for chunk in provider_buttons.chunks(3) {
+                                                rows.push(chunk.to_vec());
+                                            }
+                                            if current.is_some() {
+                                                rows.push(vec![InlineKeyboardButton::callback(
+                                                    "Reset to default",
+                                                    "model_reset",
+                                                )]);
+                                            }
+
+                                            let kb = InlineKeyboardMarkup::new(rows);
                                             let req = bot
                                                 .send_message(
                                                     teloxide::types::ChatId(chat_id_num),
-                                                    reply,
-                                                );
+                                                    &reply,
+                                                )
+                                                .reply_markup(kb);
                                             let _ = apply_thread_id(req, &thread_id).await;
                                         }
                                         ModelCommand::Set(ov) => {
@@ -1239,8 +1265,10 @@ impl Channel for TelegramChannel {
                          q: teloxide::types::CallbackQuery,
                          overrides_dep: OverridesDep,
                          Allowlist(allowlist): Allowlist,
-                         AllowUsernames(allow_usernames): AllowUsernames| async move {
-                            let approval_store = overrides_dep.approval_store;
+                         AllowUsernames(allow_usernames): AllowUsernames,
+                         ConfiguredProviders { names: cfg_provider_names, models: cfg_provider_models }: ConfiguredProviders,
+                         DefaultModel(def_model): DefaultModel| async move {
+                            let model_store = overrides_dep.model;
                             let data = match q.data.as_deref() {
                                 Some(d) => d,
                                 None => {
@@ -1249,6 +1277,105 @@ impl Channel for TelegramChannel {
                                 }
                             };
 
+                            // ── Model switching callbacks ──────────────────────────
+                            if let Some(provider) = data.strip_prefix("model_nav:") {
+                                let _ = bot.answer_callback_query(q.id).await;
+                                if let Some(maybe_msg) = q.message.as_ref() {
+                                    let models = models_for_provider(provider, &cfg_provider_models);
+                                    let mut rows: Vec<Vec<teloxide::types::InlineKeyboardButton>> = Vec::new();
+                                    for (model_id, label) in &models {
+                                        rows.push(vec![teloxide::types::InlineKeyboardButton::callback(
+                                            label.clone(),
+                                            format!("model_set:{}:{}", provider, model_id),
+                                        )]);
+                                    }
+                                    rows.push(vec![teloxide::types::InlineKeyboardButton::callback(
+                                        "Back",
+                                        "model_back",
+                                    )]);
+                                    let kb = teloxide::types::InlineKeyboardMarkup::new(rows);
+                                    let _ = bot.edit_message_text(
+                                        maybe_msg.chat().id,
+                                        maybe_msg.id(),
+                                        format!("Provider: {}", provider),
+                                    ).reply_markup(kb).await;
+                                }
+                                return Ok(());
+                            }
+
+                            if let Some(rest) = data.strip_prefix("model_set:") {
+                                let _ = bot.answer_callback_query(q.id).await;
+                                let parts: Vec<&str> = rest.splitn(2, ':').collect();
+                                if parts.len() == 2 {
+                                    let provider = parts[0];
+                                    let model = parts[1];
+                                    let ov = ModelOverride {
+                                        provider: Some(provider.to_string()),
+                                        model: model.to_string(),
+                                    };
+                                    {
+                                        let mut overrides = model_store.write().await;
+                                        overrides.insert(
+                                            format!("telegram:{}", q.from.id.0),
+                                            ov,
+                                        );
+                                    }
+                                    if let Some(maybe_msg) = q.message.as_ref() {
+                                        let _ = bot.edit_message_text(
+                                            maybe_msg.chat().id,
+                                            maybe_msg.id(),
+                                            format!("Switched to {} via {}", model, provider),
+                                        ).await;
+                                    }
+                                }
+                                return Ok(());
+                            }
+
+                            if data == "model_back" {
+                                let _ = bot.answer_callback_query(q.id).await;
+                                if let Some(maybe_msg) = q.message.as_ref() {
+                                    use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup};
+                                    let mut provider_buttons: Vec<InlineKeyboardButton> = Vec::new();
+                                    for p in &cfg_provider_names {
+                                        provider_buttons.push(
+                                            InlineKeyboardButton::callback(
+                                                p.clone(),
+                                                format!("model_nav:{}", p),
+                                            ),
+                                        );
+                                    }
+                                    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+                                    for chunk in provider_buttons.chunks(3) {
+                                        rows.push(chunk.to_vec());
+                                    }
+                                    let kb = InlineKeyboardMarkup::new(rows);
+                                    let _ = bot.edit_message_text(
+                                        maybe_msg.chat().id,
+                                        maybe_msg.id(),
+                                        format!("Current: {} (default)", def_model),
+                                    ).reply_markup(kb).await;
+                                }
+                                return Ok(());
+                            }
+
+                            if data == "model_reset" {
+                                let _ = bot.answer_callback_query(q.id).await;
+                                {
+                                    let mut overrides = model_store.write().await;
+                                    overrides.remove(&format!("telegram:{}", q.from.id.0));
+                                }
+                                if let Some(maybe_msg) = q.message.as_ref() {
+                                    let _ = bot.edit_message_text(
+                                        maybe_msg.chat().id,
+                                        maybe_msg.id(),
+                                        format!("Reset to default: {}", def_model),
+                                    ).await;
+                                }
+                                return Ok(());
+                            }
+
+                            // ── Approval callbacks (existing) ────────────────────
+                            let approval_store = overrides_dep.approval_store;
                             let parts: Vec<&str> = data.splitn(3, ' ').collect();
                             if parts.len() < 3 || parts[0] != "/approve" {
                                 let _ = bot.answer_callback_query(q.id).await;
