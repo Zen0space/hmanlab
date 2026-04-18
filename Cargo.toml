@@ -1,6 +1,6 @@
 [package]
 name = "hmanlab"
-version = "0.12.2"
+version = "0.12.3"
 edition = "2021"
 authors = ["HmanLab Contributors"]
 description = "Ultra-lightweight personal AI assistant"

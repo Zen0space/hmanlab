@@ -164,6 +164,20 @@ const TOOLS: &[ToolInfo] = &[
         opt_in: false,
     },
     ToolInfo {
+        name: "post_x",
+        description: "Post a tweet on X (Twitter)",
+        requires_config: true,
+        config_hint: "Run `hmanlab automation setup` to configure X credentials",
+        opt_in: false,
+    },
+    ToolInfo {
+        name: "post_threads",
+        description: "Post on Threads (Meta)",
+        requires_config: true,
+        config_hint: "Run `hmanlab automation setup` to configure Threads credentials",
+        opt_in: false,
+    },
+    ToolInfo {
         name: "grep",
         description: "Search file contents by regex pattern",
         requires_config: false,
@@ -330,6 +344,8 @@ fn is_tool_configured(config: &Config, name: &str) -> bool {
         }
         "r8r" => std::env::var("R8R_API_URL").is_ok(),
         "browser" => config.tools.browser.enabled,
+        "post_x" => config.tools.x.as_ref().is_some_and(|c| c.enabled),
+        "post_threads" => config.tools.threads.as_ref().is_some_and(|c| c.enabled),
         _ => true,
     }
 }
@@ -371,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_tools_list_count() {
-        assert_eq!(TOOLS.len(), 23);
+        assert_eq!(TOOLS.len(), 25);
     }
 
     #[test]
