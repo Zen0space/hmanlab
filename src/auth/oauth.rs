@@ -699,6 +699,56 @@ pub async fn run_oauth_flow_with_client_secret(
     Ok(tokens)
 }
 
+/// Run the OAuth flow using manual authorization code paste.
+///
+/// Designed for headless/VPS environments where no browser or callback server
+/// is available. The user:
+/// 1. Is given an authorization URL to open on their local device
+/// 2. Signs in to Google in their browser
+/// 3. Gets redirected to localhost (which shows an error page, but the URL
+///    contains the authorization code)
+/// 4. Copies the `code` parameter from the URL bar
+/// 5. Pastes it back into the terminal
+///
+/// No TCP listener, no browser, no SSH tunnel required.
+pub async fn run_oauth_flow_manual(
+    config: &ProviderOAuthConfig,
+    client_id: &str,
+    client_secret: &str,
+    code: &str,
+    code_verifier: &str,
+) -> Result<OAuthTokenSet> {
+    let redirect_uri = "http://localhost:1";
+
+    println!("Exchanging authorization code for tokens...");
+    let tokens = exchange_code_with_secret(
+        config,
+        code,
+        code_verifier,
+        redirect_uri,
+        client_id,
+        client_secret,
+    )
+    .await?;
+
+    Ok(tokens)
+}
+
+/// Build the pieces needed for a manual OAuth flow.
+///
+/// Returns the authorization URL, PKCE challenge, and CSRF state — everything
+/// needed to show the user a URL and later exchange a pasted code.
+pub fn prepare_manual_oauth(
+    config: &ProviderOAuthConfig,
+    client_id: &str,
+) -> (String, PkceChallenge, String) {
+    let pkce = PkceChallenge::generate();
+    let state = generate_csrf_state();
+    let redirect_uri = "http://localhost:1";
+    let auth_url = build_authorize_url(config, client_id, redirect_uri, &pkce, &state);
+    (auth_url, pkce, state)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
