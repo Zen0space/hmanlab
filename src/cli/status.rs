@@ -179,23 +179,127 @@ async fn cmd_auth_login_gemini_oauth() -> Result<()> {
 
     let client_id = std::env::var("HMANLAB_GEMINI_OAUTH_CLIENT_ID")
         .or_else(|_| std::env::var("GEMINI_CLIENT_ID"))
-        .map_err(|_| anyhow::anyhow!(
-            "Gemini OAuth client_id required. Set HMANLAB_GEMINI_OAUTH_CLIENT_ID or install Gemini CLI (credentials auto-imported from ~/.gemini/)"
-        ))?;
+        .ok();
     let client_secret = std::env::var("HMANLAB_GEMINI_OAUTH_CLIENT_SECRET")
         .or_else(|_| std::env::var("GEMINI_CLIENT_SECRET"))
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Gemini OAuth client_secret required. Set HMANLAB_GEMINI_OAUTH_CLIENT_SECRET"
-            )
-        })?;
+        .ok();
 
-    let tokens =
-        auth::oauth::run_oauth_flow_with_client_secret(&oauth_config, &client_id, &client_secret)
-            .await?;
+    let (client_id, client_secret) = match (client_id, client_secret) {
+        (Some(id), Some(secret)) => (id, secret),
+        _ => {
+            println!("Google OAuth client credentials are needed for browser/OAuth login.");
+            println!("Create one at: https://console.cloud.google.com/apis/credentials");
+            println!("  - Create a project → OAuth consent screen → OAuth client (Desktop app)");
+            println!();
+
+            print!("Enter Google OAuth client_id: ");
+            io::stdout().flush()?;
+            let id = super::common::read_line()?;
+            if id.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "client_id is required for OAuth. Use an API key instead."
+                ));
+            }
+
+            print!("Enter Google OAuth client_secret: ");
+            io::stdout().flush()?;
+            let secret = super::common::read_secret()?;
+            if secret.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "client_secret is required for OAuth. Use an API key instead."
+                ));
+            }
+
+            (id, secret)
+        }
+    };
+
+    if is_headless_env() {
+        run_gemini_oauth_manual(&oauth_config, &client_id, &client_secret).await
+    } else {
+        let tokens = auth::oauth::run_oauth_flow_with_client_secret(
+            &oauth_config,
+            &client_id,
+            &client_secret,
+        )
+        .await?;
+        save_and_print_tokens("gemini", tokens)?;
+        Ok(())
+    }
+}
+
+fn is_headless_env() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        std::env::var("DISPLAY").is_err() && std::env::var("WAYLAND_DISPLAY").is_err()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+async fn run_gemini_oauth_manual(
+    oauth_config: &auth::ProviderOAuthConfig,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<()> {
+    let (auth_url, pkce, _state) = auth::oauth::prepare_manual_oauth(oauth_config, client_id);
+
+    println!("Headless/VPS environment detected. Using manual code paste.");
+    println!();
+    println!("1. Open this URL in your browser (phone or laptop):");
+    println!();
+    println!("   {}", auth_url);
+    println!();
+    println!("2. Sign in with your Google account and grant access.");
+    println!("3. Your browser will redirect to localhost and show an error page.");
+    println!("   That is expected — look at the URL bar.");
+    println!();
+    println!("4. Copy the full URL from the address bar and paste it below,");
+    println!("   or just paste the value of the \"code\" parameter.");
+    println!();
+
+    print!("Authorization URL or code: ");
+    io::stdout().flush()?;
+    let input = super::common::read_line()?;
+
+    let code = if input.starts_with("http") {
+        url_extract_code(&input).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not extract 'code' parameter from URL. \
+                 Try pasting just the code value instead."
+            )
+        })?
+    } else {
+        input
+    };
+
+    if code.is_empty() {
+        return Err(anyhow::anyhow!("No authorization code provided."));
+    }
+
+    let tokens = auth::oauth::run_oauth_flow_manual(
+        oauth_config,
+        client_id,
+        client_secret,
+        &code,
+        &pkce.code_verifier,
+    )
+    .await?;
 
     save_and_print_tokens("gemini", tokens)?;
     Ok(())
+}
+
+fn url_extract_code(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    for (key, value) in parsed.query_pairs() {
+        if key == "code" {
+            return Some(value.to_string());
+        }
+    }
+    None
 }
 
 pub(crate) fn import_gemini_cli_credentials() -> Option<auth::OAuthTokenSet> {
