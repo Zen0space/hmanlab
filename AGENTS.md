@@ -19,8 +19,9 @@ Project-level guidance for coding agents working in this repository.
 - Plugins: Command-mode (shell template) + Binary-mode (JSON-RPC 2.0 stdin/stdout)
 - Library facade: `HmanLabAgent::builder()` for embedding as a crate (Tauri, GUI apps)
 - Runtime provider resolution: builds chain in registry order only when `providers.fallback.enabled`; honors `providers.fallback.provider`; can wrap chain with `RetryProvider` via `providers.retry.*`
-- Provider introspection CLI: `hmanlab provider status` prints resolved providers, wrapper config (retry/fallback), and quota usage snapshot
+- Provider introspection CLI: `hmanlab provider status` prints resolved providers, wrapper config (retry/fallback), and quota usage snapshot; `hmanlab provider add` interactively configures providers; `hmanlab provider list` shows all known providers and their status
 - Provider onboarding validation: Anthropic uses `GET /v1/models`; OpenAI-compatible presets validate keys with read-only endpoint checks, including Zhipu/GLM via `GET /models`
+- Gemini native provider: supports API key, OAuth (Gemini Plan / free tier), and Gemini CLI credential import; onboard offers Google Gemini as option 4 with API key / OAuth / CLI import flows; `GeminiProvider::from_config` accepts `direct_bearer` token from the encrypted TokenStore for HmanLab-managed OAuth, falling back to CLI file at `~/.gemini/`
 - Model discoverability hardening: gateway-style slash IDs (for example `anthropic/...`) only infer OpenRouter when that provider is actually available, and live `/model fetch` now honors `api_version` while normalizing Azure deployment bases to `/openai/models`
 - OpenAI-compatible serve tool calling: `/v1/chat/completions` forwards request tools to providers, returns assistant/tool messages plus tool-call payloads in OpenAI format, streams tool-call deltas even for providers using the default `chat_stream()` adapter, and rejects unsupported `tool_choice` values instead of silently ignoring them
 - Channel dispatch: avoids holding the channels map `RwLock` across async `send()` awaits
@@ -55,7 +56,7 @@ Project-level guidance for coding agents working in this repository.
 - Panel CLI fallback: feature-disabled builds still parse `hmanlab panel ...` and return explicit `--features panel` guidance instead of a raw unknown-subcommand error
 - Uninstall CLI: `hmanlab uninstall` removes `~/.hmanlab`; `--remove-binary` deletes direct installs in `~/.local/bin` or `/usr/local/bin` and defers Homebrew/Cargo binaries to their package managers
 - Process exit codes: explicit `main` mapping for success (0) and error (1); uncaught panic/crash remains Rust default (101)
-- Tests: current local validation passes `cargo fmt -- --check`, `cargo clippy -- -D warnings`, and `cargo test --doc` (128 passed, 27 ignored); `cargo nextest run --lib` is currently blocked by `auth::oauth::tests::test_callback_server_timeout` under nextest even though the same test passes when rerun with `cargo test`
+- Tests: current local validation passes `cargo fmt -- --check`, `cargo clippy -- -D warnings`, `cargo test --doc` (128 passed, 27 ignored), and `cargo nextest run --lib` (3454 passed, 6 skipped)
 
 ## Task Tracking Protocol
 

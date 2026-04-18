@@ -57,9 +57,6 @@ pub async fn provider_from_runtime_selection(
             // (extract_text skips parts tagged `thought: true`).  This applies to
             // both OAuth bearer tokens (from Gemini CLI) and plain API keys.
             if selection.name == "gemini" {
-                // Use the user-configured model, falling back to the built-in default.
-                // from_config handles the full auth priority chain:
-                //   config key → GEMINI_API_KEY → GOOGLE_API_KEY → Gemini CLI OAuth
                 let model = if configured_model.is_empty() {
                     GeminiProvider::default_gemini_model()
                 } else {
@@ -71,7 +68,13 @@ pub async fn provider_from_runtime_selection(
                     Some(selection.api_key.as_str())
                 };
                 let prefer_oauth = selection.credential.is_bearer();
-                return GeminiProvider::from_config(api_key, model, prefer_oauth)
+                let direct_bearer = match &selection.credential {
+                    crate::auth::ResolvedCredential::BearerToken { access_token, .. } => {
+                        Some(access_token.as_str())
+                    }
+                    _ => None,
+                };
+                return GeminiProvider::from_config(api_key, model, prefer_oauth, direct_bearer)
                     .map(|p| Box::new(p) as Box<dyn LLMProvider>);
             }
             let api_base = match selection.api_base.as_deref() {

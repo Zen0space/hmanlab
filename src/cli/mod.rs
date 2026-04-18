@@ -21,6 +21,7 @@ pub mod pair;
 pub mod panel;
 pub mod provider;
 pub mod quota;
+pub mod restart;
 pub mod secrets;
 #[cfg(feature = "panel")]
 pub mod serve;
@@ -229,6 +230,8 @@ enum Commands {
     },
     /// Start supervised daemon (auto-restarts gateway on failure)
     Daemon,
+    /// Restart the running hmanlab gateway/daemon
+    Restart,
     /// Migrate config and skills from an OpenClaw installation
     Migrate {
         /// Path to OpenClaw directory (auto-detected if omitted)
@@ -560,6 +563,10 @@ pub enum QuotaSubcommand {
 pub enum ProviderSubcommand {
     /// Show resolved provider chain, wrappers, and configuration
     Status,
+    /// Interactively add a new provider
+    Add,
+    /// List all known providers and their configuration status
+    List,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -706,7 +713,7 @@ pub async fn run() -> Result<()> {
             quota::cmd_quota(action)?;
         }
         Some(Commands::Provider { action }) => {
-            provider::cmd_provider(action)?;
+            provider::cmd_provider(action).await?;
         }
         Some(Commands::Panel {
             action,
@@ -733,6 +740,9 @@ pub async fn run() -> Result<()> {
         }
         Some(Commands::Daemon) => {
             daemon::cmd_daemon().await?;
+        }
+        Some(Commands::Restart) => {
+            restart::cmd_restart()?;
         }
         Some(Commands::Migrate { from, yes, dry_run }) => {
             migrate::cmd_migrate(from, yes, dry_run).await?;

@@ -1,9 +1,12 @@
-//! Native Gemini provider with OAuth and thinking model support.
+//! Native Gemini provider with OAuth, thinking model, and tool calling support.
 //!
 //! Auth priority: config key → GEMINI_API_KEY → GOOGLE_API_KEY → Gemini CLI OAuth
 //!
 //! Thinking model support: Gemini 2.5 models return parts tagged `thought: true`.
 //! This provider filters those out and only returns the final non-thought text.
+//!
+//! Tool calling: Gemini's `functionDeclarations` / `functionCall` / `functionResponse`
+//! format is translated to/from HmanLab's internal `ToolDefinition` / `LLMToolCall`.
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -14,7 +17,9 @@ use tracing::{debug, warn};
 use crate::error::{Result, ZeptoError};
 use crate::session::{ContentPart, ImageSource, Message, Role};
 
-use super::{parse_provider_error, ChatOptions, LLMProvider, LLMResponse, ToolDefinition, Usage};
+use super::{
+    parse_provider_error, ChatOptions, LLMProvider, LLMResponse, LLMToolCall, ToolDefinition, Usage,
+};
 
 /// Gemini v1beta REST API base.
 const GEMINI_API_BASE: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -185,13 +190,20 @@ impl GeminiProvider {
         DEFAULT_GEMINI_MODEL
     }
 
-    pub fn from_config(api_key: Option<&str>, model: &str, prefer_oauth: bool) -> Option<Self> {
+    pub fn from_config(
+        api_key: Option<&str>,
+        model: &str,
+        prefer_oauth: bool,
+        direct_bearer: Option<&str>,
+    ) -> Option<Self> {
         let env_key = std::env::var("GEMINI_API_KEY")
             .or_else(|_| std::env::var("GOOGLE_API_KEY"))
             .ok();
 
         let oauth_token = if prefer_oauth || api_key.map(str::is_empty).unwrap_or(true) {
-            GeminiAuth::load_cli_token()
+            direct_bearer
+                .map(String::from)
+                .or_else(GeminiAuth::load_cli_token)
         } else {
             None
         };
@@ -237,9 +249,12 @@ impl GeminiProvider {
         body
     }
 
-    /// Build a full `generateContent` request body from a slice of [`Message`]s.
-    fn build_messages_body(&self, messages: &[Message], options: &ChatOptions) -> Value {
-        // Separate the system prompt (first System message) from the conversation.
+    fn build_messages_body(
+        &self,
+        messages: &[Message],
+        options: &ChatOptions,
+        tools: &[ToolDefinition],
+    ) -> Value {
         let system_prompt = messages
             .iter()
             .find(|m| m.role == Role::System)
@@ -251,30 +266,61 @@ impl GeminiProvider {
             .map(|m| {
                 let gemini_role = match m.role {
                     Role::Assistant => "model",
+                    Role::Tool => "user",
                     _ => "user",
                 };
-                let parts: Vec<Value> = if m.has_images() {
-                    m.content_parts
-                        .iter()
-                        .filter_map(|p| match p {
-                            ContentPart::Text { text } => Some(json!({ "text": text })),
+
+                let mut parts: Vec<Value> = Vec::new();
+
+                if m.role == Role::Tool {
+                    if let Some(ref call_id) = m.tool_call_id {
+                        parts.push(json!({
+                            "functionResponse": {
+                                "name": call_id,
+                                "response": {
+                                    "result": m.content
+                                }
+                            }
+                        }));
+                    } else {
+                        parts.push(json!({ "text": &m.content }));
+                    }
+                } else if m.has_tool_calls() {
+                    if !m.content.is_empty() {
+                        parts.push(json!({ "text": &m.content }));
+                    }
+                    if let Some(ref tool_calls) = m.tool_calls {
+                        for tc in tool_calls {
+                            let args: Value =
+                                serde_json::from_str(&tc.arguments).unwrap_or(json!({}));
+                            parts.push(json!({
+                                "functionCall": {
+                                    "name": tc.name,
+                                    "args": args
+                                }
+                            }));
+                        }
+                    }
+                } else if m.has_images() {
+                    for p in &m.content_parts {
+                        match p {
+                            ContentPart::Text { text } => parts.push(json!({ "text": text })),
                             ContentPart::Image { source, media_type } => {
                                 if let ImageSource::Base64 { data } = source {
-                                    Some(json!({
+                                    parts.push(json!({
                                         "inlineData": {
                                             "mimeType": media_type,
                                             "data": data
                                         }
-                                    }))
-                                } else {
-                                    None
+                                    }));
                                 }
                             }
-                        })
-                        .collect()
+                        }
+                    }
                 } else {
-                    vec![json!({ "text": &m.content })]
-                };
+                    parts.push(json!({ "text": &m.content }));
+                }
+
                 json!({
                     "role": gemini_role,
                     "parts": parts
@@ -300,6 +346,20 @@ impl GeminiProvider {
 
         if let Some(sys) = system_prompt {
             body["systemInstruction"] = json!({ "parts": [{ "text": sys }] });
+        }
+
+        if !tools.is_empty() {
+            let function_declarations: Vec<Value> = tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.parameters
+                    })
+                })
+                .collect();
+            body["tools"] = json!([{ "functionDeclarations": function_declarations }]);
         }
 
         body
@@ -343,6 +403,33 @@ impl GeminiProvider {
         Some(Usage::new(prompt, completion))
     }
 
+    /// Extract tool calls from a Gemini `generateContent` response.
+    ///
+    /// Gemini returns `functionCall` parts with `name` and `args`.
+    /// These are converted to HmanLab's `LLMToolCall` format.
+    pub fn extract_tool_calls(response: &Value) -> Vec<LLMToolCall> {
+        let parts = match response["candidates"][0]["content"]["parts"].as_array() {
+            Some(p) => p,
+            None => return vec![],
+        };
+
+        parts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                let fc = p.get("functionCall")?;
+                let name = fc["name"].as_str().unwrap_or("unknown").to_string();
+                let args = fc.get("args").cloned().unwrap_or(json!({}));
+                let arguments = serde_json::to_string(&args).unwrap_or_else(|_| "{}".into());
+                Some(LLMToolCall::new(
+                    &format!("gemini_fc_{}", i),
+                    &name,
+                    &arguments,
+                ))
+            })
+            .collect()
+    }
+
     /// Build the full API URL for `generateContent`.
     fn api_url(&self, model: &str) -> String {
         format!("{}/models/{}:generateContent", GEMINI_API_BASE, model)
@@ -364,14 +451,18 @@ impl LLMProvider for GeminiProvider {
     async fn chat(
         &self,
         messages: Vec<Message>,
-        _tools: Vec<ToolDefinition>,
+        tools: Vec<ToolDefinition>,
         model: Option<&str>,
         options: ChatOptions,
     ) -> Result<LLMResponse> {
         let model = model.unwrap_or(&self.model);
-        let body = self.build_messages_body(&messages, &options);
+        let body = self.build_messages_body(&messages, &options, &tools);
 
-        debug!("Gemini native request to model {}", model);
+        debug!(
+            "Gemini native request to model {} ({} tools)",
+            model,
+            tools.len()
+        );
 
         let request = self
             .client
@@ -393,8 +484,13 @@ impl LLMProvider for GeminiProvider {
 
             let content = Self::extract_text(&json).unwrap_or_default();
             let usage = Self::extract_usage(&json);
+            let tool_calls = Self::extract_tool_calls(&json);
 
-            let mut llm_response = LLMResponse::text(&content);
+            let mut llm_response = if tool_calls.is_empty() {
+                LLMResponse::text(&content)
+            } else {
+                LLMResponse::with_tools(&content, tool_calls)
+            };
             if let Some(u) = usage {
                 llm_response = llm_response.with_usage(u);
             }
@@ -614,13 +710,39 @@ mod tests {
     fn test_build_messages_body_filters_system_role() {
         let provider = GeminiProvider::new_with_key("key", DEFAULT_GEMINI_MODEL);
         let messages = vec![Message::system("Be helpful"), Message::user("Hello")];
-        let body = provider.build_messages_body(&messages, &ChatOptions::default());
+        let body = provider.build_messages_body(&messages, &ChatOptions::default(), &[]);
         // System message should NOT appear in contents — only the user message.
         let contents = body["contents"].as_array().unwrap();
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0]["role"], "user");
         // System message should be lifted to systemInstruction.
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "Be helpful");
+    }
+
+    #[test]
+    fn test_build_messages_body_includes_tools() {
+        let provider = GeminiProvider::new_with_key("key", "gemini-2.0-flash");
+        let messages = vec![Message::user("search for rust")];
+        let tools = vec![ToolDefinition::new(
+            "web_search",
+            "Search the web",
+            json!({"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}),
+        )];
+        let body = provider.build_messages_body(&messages, &ChatOptions::default(), &tools);
+        assert!(body["tools"].is_array());
+        let tools_arr = body["tools"].as_array().unwrap();
+        assert_eq!(tools_arr.len(), 1);
+        let funcs = tools_arr[0]["functionDeclarations"].as_array().unwrap();
+        assert_eq!(funcs.len(), 1);
+        assert_eq!(funcs[0]["name"], "web_search");
+    }
+
+    #[test]
+    fn test_build_messages_body_no_tools_when_empty() {
+        let provider = GeminiProvider::new_with_key("key", "gemini-2.0-flash");
+        let messages = vec![Message::user("hello")];
+        let body = provider.build_messages_body(&messages, &ChatOptions::default(), &[]);
+        assert!(body.get("tools").is_none());
     }
 
     #[test]
@@ -717,7 +839,7 @@ mod tests {
             media_type: "image/png".to_string(),
         }];
         let msg = Message::user_with_images("What is this?", images);
-        let body = provider.build_messages_body(&[msg], &ChatOptions::default());
+        let body = provider.build_messages_body(&[msg], &ChatOptions::default(), &[]);
 
         let parts = body["contents"][0]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 2);
@@ -733,7 +855,7 @@ mod tests {
 
         let provider = GeminiProvider::new_with_key("key", DEFAULT_GEMINI_MODEL);
         let msg = Message::user("Hello");
-        let body = provider.build_messages_body(&[msg], &ChatOptions::default());
+        let body = provider.build_messages_body(&[msg], &ChatOptions::default(), &[]);
         let parts = body["contents"][0]["parts"].as_array().unwrap();
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0]["text"], "Hello");
@@ -753,7 +875,7 @@ mod tests {
             media_type: "image/png".to_string(),
         }];
         let msg = Message::user_with_images("Describe this", images);
-        let body = provider.build_messages_body(&[msg], &ChatOptions::default());
+        let body = provider.build_messages_body(&[msg], &ChatOptions::default(), &[]);
 
         let parts = body["contents"][0]["parts"].as_array().unwrap();
 
@@ -770,5 +892,86 @@ mod tests {
 
         // Must NOT have "text" key on image part
         assert!(parts[1].get("text").is_none());
+    }
+
+    #[test]
+    fn test_extract_tool_calls_from_function_call_parts() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "functionCall": { "name": "web_search", "args": { "query": "rust lang" } } },
+                        { "functionCall": { "name": "web_fetch", "args": { "url": "https://example.com" } } }
+                    ]
+                }
+            }]
+        });
+        let calls = GeminiProvider::extract_tool_calls(&response);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "web_search");
+        assert_eq!(calls[0].arguments, r#"{"query":"rust lang"}"#);
+        assert_eq!(calls[1].name, "web_fetch");
+    }
+
+    #[test]
+    fn test_extract_tool_calls_empty_when_no_function_call() {
+        let response = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "text": "Hello!" }]
+                }
+            }]
+        });
+        let calls = GeminiProvider::extract_tool_calls(&response);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_extract_tool_calls_empty_when_no_candidates() {
+        let response = json!({});
+        let calls = GeminiProvider::extract_tool_calls(&response);
+        assert!(calls.is_empty());
+    }
+
+    #[test]
+    fn test_build_messages_body_with_tool_result() {
+        use crate::session::ToolCall;
+        let provider = GeminiProvider::new_with_key("key", DEFAULT_GEMINI_MODEL);
+        let tc = ToolCall::new("call_1", "web_search", r#"{"query":"rust"}"#);
+        let messages = vec![
+            Message::user("search for rust"),
+            Message::assistant_with_tools("", vec![tc]),
+            Message::tool_result("call_1", "Found 100 results"),
+        ];
+        let body = provider.build_messages_body(&messages, &ChatOptions::default(), &[]);
+        let contents = body["contents"].as_array().unwrap();
+
+        // Tool result message should use "functionResponse" format
+        let tool_msg = &contents[2];
+        assert_eq!(tool_msg["role"], "user");
+        let parts = tool_msg["parts"].as_array().unwrap();
+        assert!(parts[0].get("functionResponse").is_some());
+        assert_eq!(parts[0]["functionResponse"]["name"], "call_1");
+    }
+
+    #[test]
+    fn test_build_messages_body_with_assistant_tool_calls() {
+        use crate::session::ToolCall;
+        let provider = GeminiProvider::new_with_key("key", DEFAULT_GEMINI_MODEL);
+        let tc = ToolCall::new("call_1", "web_search", r#"{"query":"rust"}"#);
+        let messages = vec![
+            Message::user("search for rust"),
+            Message::assistant_with_tools("Let me search.", vec![tc]),
+        ];
+        let body = provider.build_messages_body(&messages, &ChatOptions::default(), &[]);
+        let contents = body["contents"].as_array().unwrap();
+
+        let assistant_msg = &contents[1];
+        assert_eq!(assistant_msg["role"], "model");
+        let parts = assistant_msg["parts"].as_array().unwrap();
+        // First part is text, second is functionCall
+        assert_eq!(parts[0]["text"], "Let me search.");
+        assert!(parts[1].get("functionCall").is_some());
+        assert_eq!(parts[1]["functionCall"]["name"], "web_search");
     }
 }

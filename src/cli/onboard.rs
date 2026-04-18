@@ -24,7 +24,8 @@ async fn configure_providers(config: &mut Config) -> Result<()> {
     println!("  1. Anthropic (Claude) - Recommended");
     println!("  2. OpenAI (GPT-4, o3, etc.)");
     println!("  3. OpenRouter (400+ models via single API key)");
-    println!("  4. Skip (configure later)");
+    println!("  4. Google Gemini (API key or OAuth)");
+    println!("  5. Skip (configure later)");
     println!();
 
     let primary = loop {
@@ -38,17 +39,19 @@ async fn configure_providers(config: &mut Config) -> Result<()> {
             "" | "1" => break "anthropic",
             "2" => break "openai",
             "3" => break "openrouter",
-            "4" => {
+            "4" => break "gemini",
+            "5" => {
                 println!("Skipping provider setup. You can configure later by:");
                 println!("  - Editing {:?}", config_path);
                 println!("  - Setting environment variables:");
                 println!("    HMANLAB_PROVIDERS_ANTHROPIC_API_KEY=sk-ant-...");
                 println!("    HMANLAB_PROVIDERS_OPENAI_API_KEY=sk-...");
                 println!("    HMANLAB_PROVIDERS_OPENROUTER_API_KEY=sk-or-...");
+                println!("    HMANLAB_PROVIDERS_GEMINI_API_KEY=AIza...");
                 return Ok(());
             }
             _ => {
-                println!("Invalid choice. Please enter 1, 2, 3, or 4.");
+                println!("Invalid choice. Please enter 1, 2, 3, 4, or 5.");
                 continue;
             }
         }
@@ -60,6 +63,7 @@ async fn configure_providers(config: &mut Config) -> Result<()> {
         "anthropic" => configure_anthropic(config).await?,
         "openai" => configure_openai(config).await?,
         "openrouter" => configure_openrouter(config).await?,
+        "gemini" => configure_gemini(config).await?,
         _ => {}
     }
 
@@ -84,6 +88,9 @@ async fn configure_providers(config: &mut Config) -> Result<()> {
         if primary != "openrouter" {
             options.push(("openrouter", "OpenRouter (400+ models)"));
         }
+        if primary != "gemini" {
+            options.push(("gemini", "Google Gemini"));
+        }
         for (i, (_, label)) in options.iter().enumerate() {
             println!("  {}. {}", i + 1, label);
         }
@@ -101,6 +108,7 @@ async fn configure_providers(config: &mut Config) -> Result<()> {
                     "anthropic" => configure_anthropic(config).await?,
                     "openai" => configure_openai(config).await?,
                     "openrouter" => configure_openrouter(config).await?,
+                    "gemini" => configure_gemini(config).await?,
                     _ => {}
                 }
             }
@@ -1015,6 +1023,83 @@ async fn configure_openrouter(config: &mut Config) -> Result<()> {
     Ok(())
 }
 
+/// Configure Google Gemini provider.
+async fn configure_gemini(config: &mut Config) -> Result<()> {
+    println!();
+    println!("Google Gemini Setup");
+    println!("-------------------");
+    println!("How would you like to authenticate?");
+    println!("  1. API key (from https://aistudio.google.com/apikey)");
+    println!("  2. OAuth via Google account (Gemini Plan / free tier)");
+    println!("  3. Import from Gemini CLI (~/.gemini/)");
+    println!("  4. Skip");
+    println!();
+    print!("Choice [1]: ");
+    io::stdout().flush()?;
+
+    let choice = read_line()?;
+    let choice = if choice.is_empty() {
+        "1"
+    } else {
+        choice.trim()
+    };
+
+    match choice {
+        "1" => {
+            print!("Enter Gemini API key: ");
+            io::stdout().flush()?;
+            let api_key = read_secret()?;
+            if !api_key.is_empty() {
+                let provider_config = config.providers.gemini.get_or_insert_with(Default::default);
+                provider_config.api_key = Some(api_key);
+                config.agents.defaults.model = "gemini-2.0-flash".to_string();
+                println!("  Gemini API key configured.");
+                println!("  Default model set to: gemini-2.0-flash");
+            } else {
+                println!("  No key entered. Skipped Gemini configuration.");
+            }
+        }
+        "2" => {
+            super::status::import_gemini_cli_credentials();
+            println!("Starting browser OAuth flow...");
+            super::status::cmd_auth_login_gemini_only().await?;
+            let provider_config = config.providers.gemini.get_or_insert_with(Default::default);
+            provider_config.auth_method = Some("auto".to_string());
+            config.agents.defaults.model = "gemini-2.0-flash".to_string();
+            println!("  Auth method set to \"auto\" (OAuth first, API key fallback).");
+            println!("  Default model set to: gemini-2.0-flash");
+        }
+        "3" => {
+            if let Some(tokens) = super::status::import_gemini_cli_credentials() {
+                let encryption =
+                    hmanlab::security::encryption::resolve_master_key(true).map_err(|e| {
+                        anyhow::anyhow!("Cannot store tokens without encryption key: {}", e)
+                    })?;
+                let store = hmanlab::auth::store::TokenStore::new(encryption);
+                store
+                    .save(&tokens)
+                    .map_err(|e| anyhow::anyhow!("Failed to save tokens: {}", e))?;
+
+                let provider_config = config.providers.gemini.get_or_insert_with(Default::default);
+                provider_config.auth_method = Some("auto".to_string());
+                config.agents.defaults.model = "gemini-2.0-flash".to_string();
+                println!("  Imported Gemini CLI credentials.");
+                println!("  Auth method set to \"auto\".");
+                println!("  Default model set to: gemini-2.0-flash");
+            } else {
+                println!("  No Gemini CLI credentials found at ~/.gemini/oauth_creds.json");
+                println!("  Install Gemini CLI (https://github.com/google-gemini/gemini-cli) and run: gemini auth login");
+                println!("  Or choose option 1 to use an API key instead.");
+            }
+        }
+        _ => {
+            println!("  Skipped Gemini configuration.");
+        }
+    }
+
+    Ok(())
+}
+
 /// Configure Telegram channel.
 fn configure_telegram(config: &mut Config) -> Result<()> {
     println!();
@@ -1280,6 +1365,24 @@ fn configure_runtime(config: &mut Config) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ── Public wrappers for use by `hmanlab provider add` ─────────────────────────
+
+pub(crate) async fn configure_anthropic_pub(config: &mut Config) -> Result<()> {
+    configure_anthropic(config).await
+}
+
+pub(crate) async fn configure_openai_pub(config: &mut Config) -> Result<()> {
+    configure_openai(config).await
+}
+
+pub(crate) async fn configure_openrouter_pub(config: &mut Config) -> Result<()> {
+    configure_openrouter(config).await
+}
+
+pub(crate) async fn configure_gemini_pub(config: &mut Config) -> Result<()> {
+    configure_gemini(config).await
 }
 
 #[cfg(test)]
