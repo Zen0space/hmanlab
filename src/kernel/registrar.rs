@@ -421,6 +421,56 @@ pub async fn register_all_tools(
         }
     }
 
+    // --- Group 7b: Social media posting tools ---
+    if filter.is_enabled("post_x") {
+        if let Some(ref x_cfg) = config.tools.x {
+            if x_cfg.enabled {
+                if let (Some(ak), Some(as_), Some(at), Some(ats)) = (
+                    x_cfg.api_key.as_deref(),
+                    x_cfg.api_secret.as_deref(),
+                    x_cfg.access_token.as_deref(),
+                    x_cfg.access_token_secret.as_deref(),
+                ) {
+                    if !ak.trim().is_empty()
+                        && !as_.trim().is_empty()
+                        && !at.trim().is_empty()
+                        && !ats.trim().is_empty()
+                    {
+                        registry.register(Box::new(
+                            crate::tools::social_x::XPostTool::new(
+                                ak.trim(),
+                                as_.trim(),
+                                at.trim(),
+                                ats.trim(),
+                            ),
+                        ));
+                        info!("Registered post_x tool");
+                    }
+                }
+            }
+        }
+    }
+    if filter.is_enabled("post_threads") {
+        if let Some(ref threads_cfg) = config.tools.threads {
+            if threads_cfg.enabled {
+                if let (Some(uid), Some(token)) = (
+                    threads_cfg.user_id.as_deref(),
+                    threads_cfg.access_token.as_deref(),
+                ) {
+                    if !uid.trim().is_empty() && !token.trim().is_empty() {
+                        registry.register(Box::new(
+                            crate::tools::social_threads::ThreadsPostTool::new(
+                                uid.trim(),
+                                token.trim(),
+                            ),
+                        ));
+                        info!("Registered post_threads tool");
+                    }
+                }
+            }
+        }
+    }
+
     // --- Group 8: Google tools ---
     if filter.is_enabled("google_sheets") {
         if let Some(access_token) = config.tools.google_sheets.access_token.as_deref() {

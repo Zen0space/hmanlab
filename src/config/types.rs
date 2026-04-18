@@ -582,6 +582,27 @@ impl Default for StripeConfig {
     }
 }
 
+/// X (Twitter) API configuration for auto-posting via `post_x` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct XConfig {
+    pub enabled: bool,
+    pub api_key: Option<String>,
+    pub api_secret: Option<String>,
+    pub access_token: Option<String>,
+    pub access_token_secret: Option<String>,
+    pub tier: Option<String>,
+}
+
+/// Threads (Meta) API configuration for auto-posting via `post_threads` tool.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ThreadsConfig {
+    pub enabled: bool,
+    pub user_id: Option<String>,
+    pub access_token: Option<String>,
+}
+
 // ============================================================================
 // Tunnel Configuration
 // ============================================================================
@@ -1770,6 +1791,12 @@ pub struct ToolsConfig {
     /// Tools to deny (disable). Set by startup guard in degraded mode.
     #[serde(default)]
     pub deny: Vec<String>,
+    /// X (Twitter) API configuration for auto-posting.
+    #[serde(default)]
+    pub x: Option<XConfig>,
+    /// Threads (Meta) API configuration for auto-posting.
+    #[serde(default)]
+    pub threads: Option<ThreadsConfig>,
 }
 
 /// Configuration for the HTTP request tool.
