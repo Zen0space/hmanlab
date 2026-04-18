@@ -70,7 +70,7 @@ impl Tool for CronTool {
                 },
                 "cron_expr": {
                     "type": "string",
-                    "description": "Cron expression (UTC)"
+                    "description": "Standard 5-field cron: minute hour day-of-month month day-of-week (0=Sun, 6=Sat). Supports ranges like 1-5 and lists like 1,3,5. Examples: '0 8,12,16,20 * * 1-5' (Mon-Fri at 8,12,16,20), '0 */4 * * *' (every 4h), '0 9 * * 1-5' (9am weekdays). Times are in server local timezone."
                 },
                 "at": {
                     "type": "string",

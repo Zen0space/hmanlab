@@ -145,11 +145,25 @@ fn parse_cron_field(field: &str, min: u32, max: u32) -> Option<Vec<u32>> {
 
     let mut values = Vec::new();
     for part in field.split(',') {
-        let value = part.parse::<u32>().ok()?;
-        if !(min..=max).contains(&value) {
-            return None;
+        if let Some((a, b)) = part.split_once('-') {
+            let start = a.parse::<u32>().ok()?;
+            let end = b.parse::<u32>().ok()?;
+            if start > end {
+                return None;
+            }
+            for v in start..=end {
+                if !(min..=max).contains(&v) {
+                    return None;
+                }
+                values.push(v);
+            }
+        } else {
+            let value = part.parse::<u32>().ok()?;
+            if !(min..=max).contains(&value) {
+                return None;
+            }
+            values.push(value);
         }
-        values.push(value);
     }
     if values.is_empty() {
         None
@@ -170,10 +184,8 @@ fn next_run_from_cron_expr(expr: &str, now: i64) -> Option<i64> {
     let month = parse_cron_field(fields[3], 1, 12)?;
     let dow = parse_cron_field(fields[4], 0, 6)?;
 
-    let mut candidate = DateTime::from_timestamp_millis(now)?
-        .with_second(0)?
-        .with_nanosecond(0)?
-        + Duration::minutes(1);
+    let now_local = DateTime::from_timestamp_millis(now)?.with_timezone(Local::now().offset());
+    let mut candidate = now_local.with_second(0)?.with_nanosecond(0)? + Duration::minutes(1);
     let limit = candidate + Duration::days(366);
 
     while candidate <= limit {
@@ -1500,5 +1512,57 @@ mod tests {
         assert!(!result.contains("{{"));
         assert!(result.contains(" at "));
         assert!(result.contains(": "));
+    }
+
+    #[test]
+    fn test_parse_cron_field_range() {
+        let result = parse_cron_field("1-5", 0, 6);
+        assert_eq!(result, Some(vec![1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn test_parse_cron_field_range_hours() {
+        let result = parse_cron_field("8-12", 0, 23);
+        assert_eq!(result, Some(vec![8, 9, 10, 11, 12]));
+    }
+
+    #[test]
+    fn test_parse_cron_field_range_invalid_start_gt_end() {
+        let result = parse_cron_field("5-1", 0, 6);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_cron_field_range_out_of_bounds() {
+        let result = parse_cron_field("1-9", 0, 6);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_cron_field_mixed_range_and_values() {
+        let result = parse_cron_field("1-3,5,7", 0, 23);
+        assert_eq!(result, Some(vec![1, 2, 3, 5, 7]));
+    }
+
+    #[test]
+    fn test_cron_expr_weekday_range_valid() {
+        assert!(is_valid_cron_expr("0 9 * * 1-5"));
+    }
+
+    #[test]
+    fn test_cron_expr_weekday_range_next_run() {
+        let now = now_ms();
+        let next = next_run_from_cron_expr("0 9 * * 1-5", now);
+        assert!(next.is_some());
+    }
+
+    #[test]
+    fn test_cron_expr_weekend_only() {
+        assert!(is_valid_cron_expr("0 10 * * 0,6"));
+    }
+
+    #[test]
+    fn test_cron_expr_every_4h_weekdays() {
+        assert!(is_valid_cron_expr("0 */4 * * 1-5"));
     }
 }
