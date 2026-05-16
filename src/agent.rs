@@ -118,10 +118,11 @@ pub async fn agent_loop(
                 name: tc.function.name.clone(),
                 args: tc.function.arguments.clone(),
             });
-            let output = match tools::execute_tool(&tc.function.name, &tc.function.arguments, &ctx).await {
-                Ok(s) => s,
-                Err(e) => format!("error: {e}"),
-            };
+            let output =
+                match tools::execute_tool(&tc.function.name, &tc.function.arguments, &ctx).await {
+                    Ok(s) => s,
+                    Err(e) => format!("error: {e}"),
+                };
             let _ = tx.send(StreamMsg::ToolResult {
                 output: output.clone(),
             });

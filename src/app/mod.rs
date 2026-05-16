@@ -102,7 +102,10 @@ pub enum StreamMsg {
         completion_tokens: u32,
     },
     Error(String),
-    Models { models: Vec<String>, base: String },
+    Models {
+        models: Vec<String>,
+        base: String,
+    },
     SessionList(Vec<Session>),
     Loaded {
         session: Session,
@@ -113,7 +116,9 @@ pub enum StreamMsg {
     },
     /// Assistant turn just ended and produced tool calls (the assistant message
     /// content has already been streamed via `Chunk`).
-    AssistantTurnEnded { tool_calls: Vec<ToolCall> },
+    AssistantTurnEnded {
+        tool_calls: Vec<ToolCall>,
+    },
     /// Compaction (manual `/compact` or auto-triggered) finished — the
     /// model returned a summary that should replace the visible history.
     CompactionDone {
@@ -131,7 +136,9 @@ pub enum StreamMsg {
     },
     /// Tool finished — its output replaces the placeholder content on the
     /// trailing `tool` message.
-    ToolResult { output: String },
+    ToolResult {
+        output: String,
+    },
     /// Start a fresh assistant placeholder for the next agent turn.
     NewAssistantTurn,
     /// The agent wants the user to confirm a risky action.

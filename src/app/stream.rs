@@ -57,9 +57,8 @@ impl App {
                     if let Some(last) = self.messages.last_mut() {
                         if last.role == "assistant" && !tool_calls.is_empty() {
                             last.tool_calls = Some(tool_calls.clone());
-                            let tc_value = serde_json::to_value(&tool_calls).unwrap_or_else(
-                                |_| serde_json::Value::Array(Vec::new()),
-                            );
+                            let tc_value = serde_json::to_value(&tool_calls)
+                                .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()));
                             Some((last.content.clone(), tc_value))
                         } else {
                             if last.role == "assistant" {
@@ -70,8 +69,7 @@ impl App {
                     } else {
                         None
                     };
-                if let (Some((content, tc_value)), Some(api_tx)) =
-                    (snapshot, self.api_tx.as_ref())
+                if let (Some((content, tc_value)), Some(api_tx)) = (snapshot, self.api_tx.as_ref())
                 {
                     let _ = api_tx.send(ApiOp::AssistantToolCalls {
                         content,
@@ -111,9 +109,7 @@ impl App {
                         break;
                     }
                 }
-                if let (Some((name, output)), Some(api_tx)) =
-                    (to_persist, self.api_tx.as_ref())
-                {
+                if let (Some((name, output)), Some(api_tx)) = (to_persist, self.api_tx.as_ref()) {
                     let _ = api_tx.send(ApiOp::ToolResult { name, output });
                 }
                 self.active_tool_msg_idx = None;
@@ -131,11 +127,17 @@ impl App {
                 self.mode = Mode::Confirm;
                 self.status = "Confirmation needed — y/n".into();
             }
-            StreamMsg::Done { prompt_tokens, completion_tokens } => {
+            StreamMsg::Done {
+                prompt_tokens,
+                completion_tokens,
+            } => {
                 self.persist_assistant_if_any();
-                self.total_prompt_tokens = self.total_prompt_tokens.saturating_add(prompt_tokens as u64);
-                self.total_completion_tokens =
-                    self.total_completion_tokens.saturating_add(completion_tokens as u64);
+                self.total_prompt_tokens = self
+                    .total_prompt_tokens
+                    .saturating_add(prompt_tokens as u64);
+                self.total_completion_tokens = self
+                    .total_completion_tokens
+                    .saturating_add(completion_tokens as u64);
                 // Track this turn's prompt size for the next auto-compact
                 // check in `send_to_llm`.
                 self.last_prompt_tokens = prompt_tokens;
@@ -178,8 +180,9 @@ impl App {
             } => {
                 self.compacting = false;
                 self.compact_task = None;
-                self.total_prompt_tokens =
-                    self.total_prompt_tokens.saturating_add(prompt_tokens as u64);
+                self.total_prompt_tokens = self
+                    .total_prompt_tokens
+                    .saturating_add(prompt_tokens as u64);
                 self.total_completion_tokens = self
                     .total_completion_tokens
                     .saturating_add(completion_tokens as u64);
@@ -227,9 +230,9 @@ impl App {
                         "Saved to {} (project memory `compact-current`).",
                         path.display()
                     )),
-                    Err(e) => self.push_info(format!(
-                        "Compaction succeeded but persistence failed: {e}"
-                    )),
+                    Err(e) => {
+                        self.push_info(format!("Compaction succeeded but persistence failed: {e}"))
+                    }
                 }
                 // Replay the user message that was buffered while
                 // compaction ran, if any. Done last so all state is
@@ -245,9 +248,7 @@ impl App {
                 // before the result came back). Drop any buffered message
                 // — re-running it would just re-trigger the auto-compact.
                 self.pending_after_compact = None;
-                self.push_info(format!(
-                    "Compaction failed: {e}. History unchanged."
-                ));
+                self.push_info(format!("Compaction failed: {e}. History unchanged."));
                 self.status = format!("Compact error: {e}");
             }
             StreamMsg::Models { models, base } => {

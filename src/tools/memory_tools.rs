@@ -38,7 +38,9 @@ pub(super) async fn tool_save_memory(args: &Value, ctx: &ToolContext) -> Result<
     }
     match kind {
         "user" | "project" | "feedback" | "reference" => {}
-        other => bail!("save_memory: unknown type '{other}' — expected user|project|feedback|reference"),
+        other => {
+            bail!("save_memory: unknown type '{other}' — expected user|project|feedback|reference")
+        }
     }
 
     let slug = memory::sanitize_name(name);
@@ -81,7 +83,12 @@ pub(super) async fn tool_read_memory(args: &Value, ctx: &ToolContext) -> Result<
     // Return the rendered file the same shape it lives on disk — including
     // frontmatter — so the model sees the full structure when reasoning about
     // updates. Cheap and unambiguous.
-    Ok(build_memory_file(&mem.name, &mem.kind, &mem.description, &mem.body))
+    Ok(build_memory_file(
+        &mem.name,
+        &mem.kind,
+        &mem.description,
+        &mem.body,
+    ))
 }
 
 pub(super) async fn tool_forget_memory(args: &Value, ctx: &ToolContext) -> Result<String> {
@@ -118,10 +125,7 @@ pub(super) async fn tool_forget_memory(args: &Value, ctx: &ToolContext) -> Resul
     }
 
     memory::forget_memory(scope, &slug, &ctx.workspace)?;
-    Ok(format!(
-        "forgot memory `{slug}` (scope={})",
-        scope.as_str()
-    ))
+    Ok(format!("forgot memory `{slug}` (scope={})", scope.as_str()))
 }
 
 fn parse_scope(args: &Value) -> Result<MemoryScope> {

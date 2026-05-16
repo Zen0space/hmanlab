@@ -40,8 +40,7 @@ impl Client {
         tools: Option<Vec<Tool>>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem>> + Send>>> {
         let url = format!("{}/chat/completions", self.base);
-        let oai_messages: Vec<OaiMessage> =
-            messages.into_iter().map(OaiMessage::from).collect();
+        let oai_messages: Vec<OaiMessage> = messages.into_iter().map(OaiMessage::from).collect();
         let req = OaiRequest {
             model,
             messages: &oai_messages,
@@ -60,7 +59,12 @@ impl Client {
 
         // Accumulator for streamed tool_calls (arguments arrive as fragments).
         let stream = futures::stream::unfold(
-            (byte_stream, Vec::<u8>::new(), Vec::<PartialToolCall>::new(), false),
+            (
+                byte_stream,
+                Vec::<u8>::new(),
+                Vec::<PartialToolCall>::new(),
+                false,
+            ),
             |(mut bs, mut buf, mut tcs, mut done)| async move {
                 if done {
                     return None;
@@ -112,7 +116,9 @@ impl Client {
                                             tcs.push(PartialToolCall::default());
                                         }
                                         let slot = &mut tcs[idx];
-                                        if let Some(name) = tc.function.as_ref().and_then(|f| f.name.as_ref()) {
+                                        if let Some(name) =
+                                            tc.function.as_ref().and_then(|f| f.name.as_ref())
+                                        {
                                             slot.name = name.clone();
                                         }
                                         if let Some(args) =
@@ -202,7 +208,6 @@ impl Client {
         );
         Ok(Box::pin(stream))
     }
-
 }
 
 #[derive(Default)]
@@ -218,7 +223,8 @@ fn finalize_calls(parts: Vec<PartialToolCall>) -> Vec<ToolCall> {
         .map(|p| ToolCall {
             function: ToolCallFunction {
                 name: p.name,
-                arguments: serde_json::from_str(&p.args).unwrap_or(Value::Object(Default::default())),
+                arguments: serde_json::from_str(&p.args)
+                    .unwrap_or(Value::Object(Default::default())),
             },
         })
         .collect()

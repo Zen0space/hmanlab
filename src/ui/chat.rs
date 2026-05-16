@@ -20,8 +20,7 @@ const BREATH_PERIOD: u64 = 30;
 /// Sine-interpolate between two RGB colors using `tick` as phase. Returns
 /// `lo` at the trough and `hi` at the peak of each breath cycle.
 fn breath_color(tick: u64, lo: (u8, u8, u8), hi: (u8, u8, u8)) -> Color {
-    let phase =
-        (tick % BREATH_PERIOD) as f32 / BREATH_PERIOD as f32 * std::f32::consts::TAU;
+    let phase = (tick % BREATH_PERIOD) as f32 / BREATH_PERIOD as f32 * std::f32::consts::TAU;
     let t = (phase.sin() * 0.5) + 0.5;
     let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
     Color::Rgb(lerp(lo.0, hi.0), lerp(lo.1, hi.1), lerp(lo.2, hi.2))
@@ -55,7 +54,10 @@ fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> String {
             format!("ls · {}", get_str("path").unwrap_or_else(|| ".".into()))
         }
         "find_files" | "Glob" => {
-            format!("find · {}", get_str("pattern").unwrap_or_else(|| "?".into()))
+            format!(
+                "find · {}",
+                get_str("pattern").unwrap_or_else(|| "?".into())
+            )
         }
         "git_status" => "git status".into(),
         "git_log" => {
@@ -70,7 +72,10 @@ fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> String {
             Some(p) if !p.is_empty() => format!("git diff · {p}"),
             _ => "git diff".into(),
         },
-        "git_show" => format!("git show · {}", get_str("rev").unwrap_or_else(|| "?".into())),
+        "git_show" => format!(
+            "git show · {}",
+            get_str("rev").unwrap_or_else(|| "?".into())
+        ),
         "edit_file" | "Edit" => format!("edit · {}", get_str("path").unwrap_or_else(|| "?".into())),
         "write_file" | "Write" => {
             format!("write · {}", get_str("path").unwrap_or_else(|| "?".into()))
@@ -150,9 +155,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
 
         // Tool rows are detected as errored by their content's first line —
         // the agent loop in agent.rs wraps tool failures as "error: {e}".
-        let tool_errored = is_tool
-            && !is_active_tool
-            && msg.content.trim_start().starts_with("error:");
+        let tool_errored =
+            is_tool && !is_active_tool && msg.content.trim_start().starts_with("error:");
 
         // Header line. For tool messages we collapse what used to be three
         // separate signals (`● ⏵ tool · name`, the `→ name(json)` echo on the
@@ -187,7 +191,11 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                     let body_lines = msg.content.lines().count().max(1);
                     format!("  ({body_lines}L)")
                 };
-                let color = if tool_errored { Color::Red } else { Color::Blue };
+                let color = if tool_errored {
+                    Color::Red
+                } else {
+                    Color::Blue
+                };
                 (format!("{glyph} {summary}{suffix}"), color)
             }
             _ => ("?".to_string(), Color::Gray),
@@ -230,7 +238,10 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             let suffix = if thought_expanded {
                 String::new()
             } else {
-                format!("  ({body_lines} line{})", if body_lines == 1 { "" } else { "s" })
+                format!(
+                    "  ({body_lines} line{})",
+                    if body_lines == 1 { "" } else { "s" }
+                )
             };
             let header_text = format!("{indent}{chevron} thinking{suffix}");
             text_lines.push(header_text.clone());
@@ -259,7 +270,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             plain.push_str(span.content.as_ref());
                         }
                         text_lines.push(plain);
-                        let mut line_spans: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 1);
+                        let mut line_spans: Vec<Span<'static>> =
+                            Vec::with_capacity(spans.len() + 1);
                         line_spans.push(Span::raw(indent.to_string()));
                         line_spans.extend(spans);
                         lines.push(Line::from(line_spans));
@@ -315,7 +327,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             plain.push_str(span.content.as_ref());
                         }
                         text_lines.push(plain);
-                        let mut line_spans: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 1);
+                        let mut line_spans: Vec<Span<'static>> =
+                            Vec::with_capacity(spans.len() + 1);
                         line_spans.push(Span::raw(indent.to_string()));
                         line_spans.extend(spans);
                         lines.push(Line::from(line_spans));

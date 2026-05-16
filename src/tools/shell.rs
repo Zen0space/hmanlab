@@ -49,7 +49,11 @@ pub(super) async fn tool_run_command(args: &Value, ctx: &ToolContext) -> Result<
     }
     text.push_str(&format!(
         "\n[exit {}]",
-        output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "?".into())
+        output
+            .status
+            .code()
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "?".into())
     ));
     Ok(truncate_utf8(text, MAX_CMD_BYTES))
 }

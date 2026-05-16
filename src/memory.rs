@@ -56,8 +56,9 @@ pub struct MemoryFile {
 /// memories available" rather than an error so a project-only setup still works.
 pub fn scope_dir(scope: MemoryScope, workspace: &Path) -> Option<PathBuf> {
     match scope {
-        MemoryScope::User => std::env::var_os("HOME")
-            .map(|h| PathBuf::from(h).join(".hmanlab/memory")),
+        MemoryScope::User => {
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".hmanlab/memory"))
+        }
         MemoryScope::Project => Some(workspace.join(".hmanlab/memory")),
     }
 }
@@ -97,15 +98,12 @@ pub fn list_memories(scope: MemoryScope, workspace: &Path) -> Result<Vec<MemoryF
     Ok(out)
 }
 
-pub fn read_memory(
-    scope: MemoryScope,
-    name: &str,
-    workspace: &Path,
-) -> Result<MemoryFile> {
+pub fn read_memory(scope: MemoryScope, name: &str, workspace: &Path) -> Result<MemoryFile> {
     let dir = scope_dir(scope, workspace)
         .ok_or_else(|| anyhow!("$HOME not set; user-scope memories unavailable"))?;
     let path = dir.join(format!("{}.md", sanitize_name(name)));
-    parse_memory_file(&path).ok_or_else(|| anyhow!("memory '{name}' not found in {} scope", scope.as_str()))
+    parse_memory_file(&path)
+        .ok_or_else(|| anyhow!("memory '{name}' not found in {} scope", scope.as_str()))
 }
 
 /// Write a memory file and rebuild the scope's index. Creates the scope

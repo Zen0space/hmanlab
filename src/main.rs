@@ -26,7 +26,11 @@ mod ui;
 use app::{App, AppAction, StreamMsg};
 
 #[derive(Parser, Debug)]
-#[command(name = "hmanlab", version, about = "hmanlab — terminal UI for Ollama, backed by hmanlab-api")]
+#[command(
+    name = "hmanlab",
+    version,
+    about = "hmanlab — terminal UI for Ollama, backed by hmanlab-api"
+)]
 struct Cli {
     /// Ollama URL. Overrides config; falls back to http://localhost:11434.
     #[arg(long, env = "OLLAMA_HOST")]
@@ -150,15 +154,17 @@ async fn main() -> Result<()> {
     // Ollama. A user with z.ai but no Ollama running should see "Ready",
     // not "No models".
     let total = app.models.len() + app.extra_models.len();
-    let db_state = if app.api.is_some() { "API on" } else { "API off" };
+    let db_state = if app.api.is_some() {
+        "API on"
+    } else {
+        "API off"
+    };
     app.status = if total == 0 {
         format!(
             "No models — try /host <url> for Ollama, or /model to add a BYOK provider  ·  {db_state}"
         )
     } else {
-        format!(
-            "Ready — {total} model(s)  ·  {db_state}  ·  /help for commands"
-        )
+        format!("Ready — {total} model(s)  ·  {db_state}  ·  /help for commands")
     };
     if let Some(w) = api_warning {
         app.status = format!("{w}  ·  running without persistence");
@@ -166,7 +172,11 @@ async fn main() -> Result<()> {
     let res = run(&mut terminal, app).await;
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     if let Err(e) = res {
@@ -176,10 +186,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run<B: ratatui::backend::Backend>(
-    terminal: &mut Terminal<B>,
-    mut app: App,
-) -> Result<()> {
+async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<StreamMsg>();
     let mut events = EventStream::new();
 

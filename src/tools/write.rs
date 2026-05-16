@@ -42,8 +42,8 @@ pub(super) async fn tool_edit_file(args: &Value, ctx: &ToolContext) -> Result<St
 
     let resolved = resolve_in_workspace(&ctx.workspace, path)?;
     let bytes = tokio::fs::read(&resolved).await?;
-    let content = String::from_utf8(bytes)
-        .map_err(|_| anyhow!("edit_file: {} is not valid UTF-8", path))?;
+    let content =
+        String::from_utf8(bytes).map_err(|_| anyhow!("edit_file: {} is not valid UTF-8", path))?;
 
     let matches = content.matches(old_string).count();
     if matches == 0 {

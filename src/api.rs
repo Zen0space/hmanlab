@@ -74,7 +74,11 @@ impl Client {
             .build()
             .expect("reqwest client");
         let base = base.trim_end_matches('/').to_string();
-        Self { http, base, api_key }
+        Self {
+            http,
+            base,
+            api_key,
+        }
     }
 
     /// Verify the key works. Used at startup so we can show a useful status.
@@ -144,11 +148,7 @@ impl Client {
         }
     }
 
-    pub async fn load_recent_messages(
-        &self,
-        session_id: &str,
-        limit: i64,
-    ) -> Result<Vec<Message>> {
+    pub async fn load_recent_messages(&self, session_id: &str, limit: i64) -> Result<Vec<Message>> {
         let url = format!(
             "{}/v1/sessions/{}/messages?limit={}",
             self.base, session_id, limit
@@ -187,11 +187,7 @@ impl Client {
         Ok(env.messages)
     }
 
-    pub async fn post_message(
-        &self,
-        session_id: &str,
-        body: serde_json::Value,
-    ) -> Result<Message> {
+    pub async fn post_message(&self, session_id: &str, body: serde_json::Value) -> Result<Message> {
         let url = format!("{}/v1/sessions/{}/messages", self.base, session_id);
         let env: MessageEnvelope = self
             .http
@@ -271,7 +267,9 @@ pub async fn run_writer(client: Client, mut rx: mpsc::UnboundedReceiver<ApiOp>) 
                     .await;
             }
             ApiOp::AssistantMessage { content, model } => {
-                let Some(sid) = session_id.clone() else { continue };
+                let Some(sid) = session_id.clone() else {
+                    continue;
+                };
                 let _ = client
                     .post_message(
                         &sid,
@@ -288,7 +286,9 @@ pub async fn run_writer(client: Client, mut rx: mpsc::UnboundedReceiver<ApiOp>) 
                 tool_calls,
                 model,
             } => {
-                let Some(sid) = session_id.clone() else { continue };
+                let Some(sid) = session_id.clone() else {
+                    continue;
+                };
                 let _ = client
                     .post_message(
                         &sid,
@@ -302,7 +302,9 @@ pub async fn run_writer(client: Client, mut rx: mpsc::UnboundedReceiver<ApiOp>) 
                     .await;
             }
             ApiOp::ToolResult { name, output } => {
-                let Some(sid) = session_id.clone() else { continue };
+                let Some(sid) = session_id.clone() else {
+                    continue;
+                };
                 let _ = client
                     .post_message(
                         &sid,

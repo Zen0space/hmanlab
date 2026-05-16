@@ -15,7 +15,9 @@ pub(super) const MAX_CMD_BYTES: usize = 4_000;
 pub(super) fn resolve_in_workspace(workspace: &Path, input: &str) -> Result<PathBuf> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Ok(workspace.canonicalize().unwrap_or_else(|_| workspace.to_path_buf()));
+        return Ok(workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf()));
     }
     let p = Path::new(trimmed);
     let abs = if p.is_absolute() {

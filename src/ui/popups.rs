@@ -106,14 +106,10 @@ pub(super) fn render_session_picker(f: &mut Frame, full: Rect, app: &App) {
             ListItem::new(label).style(style)
         })
         .collect();
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(format!(
-                " sessions ({}) — ↑↓ Enter Esc ",
-                app.session_picker_items.len()
-            )),
-    );
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+        " sessions ({}) — ↑↓ Enter Esc ",
+        app.session_picker_items.len()
+    )));
     f.render_widget(list, area);
 }
 
@@ -286,9 +282,7 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
                 let style = match dl.kind {
                     tools::DiffLineKind::Added => Style::default().fg(Color::Green),
                     tools::DiffLineKind::Removed => Style::default().fg(Color::Red),
-                    tools::DiffLineKind::Context => {
-                        Style::default().fg(Color::DarkGray)
-                    }
+                    tools::DiffLineKind::Context => Style::default().fg(Color::DarkGray),
                     tools::DiffLineKind::Summary => Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -296,10 +290,7 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
                 // Wrap each diff line at content_width so long lines stay
                 // inside the popup. Re-apply the colour to every wrapped
                 // sub-line so a long delete doesn't turn black halfway.
-                for chunk in wrap_styled_segments(
-                    vec![(dl.text.clone(), style)],
-                    content_width,
-                ) {
+                for chunk in wrap_styled_segments(vec![(dl.text.clone(), style)], content_width) {
                     lines.push(Line::from(chunk));
                 }
             }
@@ -314,8 +305,13 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
         let last_idx = visible.saturating_sub(1);
         lines.truncate(last_idx);
         lines.push(Line::from(Span::styled(
-            format!("…({} more lines hidden — deny + ask AI to shorten if needed)", overflow),
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            format!(
+                "…({} more lines hidden — deny + ask AI to shorten if needed)",
+                overflow
+            ),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::ITALIC),
         )));
     }
 
@@ -325,7 +321,9 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(
             "[y]",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" allow   "),
         Span::styled(

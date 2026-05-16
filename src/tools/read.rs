@@ -83,7 +83,10 @@ pub(super) async fn tool_find_files(args: &Value, ctx: &ToolContext) -> Result<S
         .get("pattern")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("find_files requires 'pattern'"))?;
-    let ws_canon = ctx.workspace.canonicalize().unwrap_or_else(|_| ctx.workspace.clone());
+    let ws_canon = ctx
+        .workspace
+        .canonicalize()
+        .unwrap_or_else(|_| ctx.workspace.clone());
     let full_pattern = if pattern.starts_with('/') {
         pattern.to_string()
     } else {

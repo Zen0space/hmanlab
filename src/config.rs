@@ -77,11 +77,7 @@ pub const OPENCODE_DEFAULT_MODEL: &str = "glm-5.1";
 /// (`[ollama-cloud] glm-4.7`) reads cleanly.
 pub const OLLAMA_CLOUD_PROVIDER: &str = "ollama-cloud";
 pub const OLLAMA_CLOUD_BASE: &str = "https://ollama.com";
-pub const OLLAMA_CLOUD_MODELS: &[&str] = &[
-    "glm-4.7",
-    "gpt-oss:120b-cloud",
-    "qwen3-coder-next",
-];
+pub const OLLAMA_CLOUD_MODELS: &[&str] = &["glm-4.7", "gpt-oss:120b-cloud", "qwen3-coder-next"];
 pub const OLLAMA_CLOUD_DEFAULT_MODEL: &str = "glm-4.7";
 
 /// One user-added model from a BYOK provider. Lives in extra_models so the
@@ -142,8 +138,7 @@ pub fn load() -> Result<Option<Config>> {
 pub fn save(c: &Config) -> Result<()> {
     let p = path()?;
     if let Some(parent) = p.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let s = serde_json::to_string_pretty(c)?;
     std::fs::write(&p, s).with_context(|| format!("write {}", p.display()))?;
@@ -170,16 +165,11 @@ pub fn save(c: &Config) -> Result<()> {
 /// anyway. If the user skips this step entirely, `ollama_host` stays unset
 /// and the TUI falls back to `DEFAULT_OLLAMA_HOST` on startup (which is a
 /// no-op when Ollama isn't running).
-pub async fn run_setup_wizard(
-    api_url: &str,
-    existing_ollama: Option<&str>,
-) -> Result<Config> {
+pub async fn run_setup_wizard(api_url: &str, existing_ollama: Option<&str>) -> Result<Config> {
     println!();
     println!("\x1b[1mWelcome to hmanlab.\x1b[0m");
     println!();
-    println!(
-        "Your hmanlab key authenticates the TUI to the backend and powers session storage."
-    );
+    println!("Your hmanlab key authenticates the TUI to the backend and powers session storage.");
     println!("Get one (or sign in) at \x1b[36mhttps://hmanlab.senireka.my\x1b[0m → API keys.");
     println!();
 
@@ -221,8 +211,16 @@ pub async fn run_setup_wizard(
     println!();
     println!("Connect a provider? (optional — skip with Enter)");
     loop {
-        let sub_state = if cfg.zai_api_key.is_some() { " (configured)" } else { "" };
-        let usage_state = if cfg.zai_usage_api_key.is_some() { " (configured)" } else { "" };
+        let sub_state = if cfg.zai_api_key.is_some() {
+            " (configured)"
+        } else {
+            ""
+        };
+        let usage_state = if cfg.zai_usage_api_key.is_some() {
+            " (configured)"
+        } else {
+            ""
+        };
         let ollama_state = match &cfg.ollama_host {
             Some(h) => format!(" (configured: {h})"),
             None => String::new(),

@@ -127,7 +127,11 @@ impl Client {
             .build()
             .expect("reqwest client");
         let base = base.trim_end_matches('/').to_string();
-        Self { http, base, api_key: None }
+        Self {
+            http,
+            base,
+            api_key: None,
+        }
     }
 
     /// Construct a client that authenticates every request with a Bearer
@@ -222,9 +226,7 @@ impl Client {
                                     done = true;
                                     return Some((
                                         Ok(StreamItem::Done {
-                                            prompt_tokens: chunk
-                                                .prompt_eval_count
-                                                .unwrap_or(0),
+                                            prompt_tokens: chunk.prompt_eval_count.unwrap_or(0),
                                             completion_tokens: chunk.eval_count.unwrap_or(0),
                                         }),
                                         (bs, buf, done),
@@ -234,10 +236,7 @@ impl Client {
                                 continue;
                             }
                             Err(e) => {
-                                return Some((
-                                    Err(anyhow!("parse error: {e}")),
-                                    (bs, buf, true),
-                                ));
+                                return Some((Err(anyhow!("parse error: {e}")), (bs, buf, true)));
                             }
                         }
                     }
@@ -266,9 +265,7 @@ impl Client {
                                     }
                                     return Some((
                                         Ok(StreamItem::Done {
-                                            prompt_tokens: chunk
-                                                .prompt_eval_count
-                                                .unwrap_or(0),
+                                            prompt_tokens: chunk.prompt_eval_count.unwrap_or(0),
                                             completion_tokens: chunk.eval_count.unwrap_or(0),
                                         }),
                                         (bs, Vec::new(), true),

@@ -107,7 +107,9 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
         Span::raw("  model: "),
         Span::styled(
             app.model.as_str(),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::raw("  host: "),
         Span::styled(host_short, Style::default().fg(Color::DarkGray)),
@@ -121,8 +123,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, app: &App) {
-    let help =
-        " /help · drag:select+copy · wheel:scroll · click tool to fold · Ctrl+T:fold all ";
+    let help = " /help · drag:select+copy · wheel:scroll · click tool to fold · Ctrl+T:fold all ";
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])

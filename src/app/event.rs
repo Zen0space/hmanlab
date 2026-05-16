@@ -120,8 +120,8 @@ impl App {
                         if self.point_in_sidebar(col, row) {
                             self.try_open_sidebar_at(row);
                         } else {
-                            let in_chat_col = col >= self.chat_x
-                                && col < self.chat_x.saturating_add(self.chat_w);
+                            let in_chat_col =
+                                col >= self.chat_x && col < self.chat_x.saturating_add(self.chat_w);
                             if in_chat_col && self.open_file.is_none() {
                                 self.try_toggle_tool_at(row);
                             }
@@ -352,8 +352,7 @@ impl App {
             .filter(|(_, m)| m.role == "assistant" && m.content.contains("</think>"))
             .map(|(i, _)| i)
             .collect();
-        let any_expanded =
-            !self.expanded_tools.is_empty() || !self.expanded_thoughts.is_empty();
+        let any_expanded = !self.expanded_tools.is_empty() || !self.expanded_thoughts.is_empty();
         if any_expanded {
             self.expanded_tools.clear();
             self.expanded_thoughts.clear();
@@ -386,7 +385,10 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                if let Some(s) = self.session_picker_items.get(self.session_picker_index).cloned()
+                if let Some(s) = self
+                    .session_picker_items
+                    .get(self.session_picker_index)
+                    .cloned()
                 {
                     self.mode = Mode::Chat;
                     // Reuse the existing load-by-prefix path: just pass the
@@ -470,11 +472,7 @@ impl App {
         AppAction::Continue
     }
 
-    fn handle_chat(
-        &mut self,
-        key: KeyEvent,
-        tx: &mpsc::UnboundedSender<StreamMsg>,
-    ) -> AppAction {
+    fn handle_chat(&mut self, key: KeyEvent, tx: &mpsc::UnboundedSender<StreamMsg>) -> AppAction {
         // File-viewer overlay takes over input while open. Esc closes it,
         // scroll keys page through the file, everything else is swallowed
         // so the chat input stays inert until the user dismisses the file.
@@ -611,11 +609,7 @@ impl App {
         AppAction::Continue
     }
 
-    fn handle_command(
-        &mut self,
-        cmd: Command,
-        tx: &mpsc::UnboundedSender<StreamMsg>,
-    ) -> AppAction {
+    fn handle_command(&mut self, cmd: Command, tx: &mpsc::UnboundedSender<StreamMsg>) -> AppAction {
         match cmd {
             Command::Model(None) => self.open_picker(),
             Command::Model(Some(name)) => self.switch_model(&name),
@@ -705,10 +699,9 @@ impl App {
         self.add_model_step = AddModelStep::Key;
         self.add_model_input = fresh_textarea();
         let (placeholder, label) = match provider {
-            p if p == crate::config::ZAI_USAGE_PROVIDER => (
-                "Paste your z.ai usage-based API key",
-                "z.ai usage-based",
-            ),
+            p if p == crate::config::ZAI_USAGE_PROVIDER => {
+                ("Paste your z.ai usage-based API key", "z.ai usage-based")
+            }
             p if p == crate::config::OLLAMA_CLOUD_PROVIDER => (
                 "Paste your Ollama Cloud API key (from https://ollama.com/settings/keys)",
                 "Ollama Cloud",
@@ -919,7 +912,9 @@ impl App {
 
     fn list_sessions_inline(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
         let Some(client) = self.api.clone() else {
-            self.push_info("API is off — set HMANLAB_API_KEY or pass --api-key to enable persistence.".into());
+            self.push_info(
+                "API is off — set HMANLAB_API_KEY or pass --api-key to enable persistence.".into(),
+            );
             return;
         };
         let tx = tx.clone();
@@ -970,7 +965,9 @@ impl App {
             return;
         };
         let Some(session_id) = self.loaded_session_id.clone() else {
-            self.push_info("/more works inside a /load'd session. Run /sessions and /load <id> first.".into());
+            self.push_info(
+                "/more works inside a /load'd session. Run /sessions and /load <id> first.".into(),
+            );
             return;
         };
         let Some(before_id) = self.oldest_loaded_msg_id else {
@@ -980,10 +977,7 @@ impl App {
         self.status = "Loading older messages…".into();
         let tx = tx.clone();
         tokio::spawn(async move {
-            match client
-                .load_older_messages(&session_id, before_id, 10)
-                .await
-            {
+            match client.load_older_messages(&session_id, before_id, 10).await {
                 Ok(messages) => {
                     let _ = tx.send(StreamMsg::MoreLoaded { messages });
                 }
@@ -1030,7 +1024,10 @@ impl App {
     fn switch_host(&mut self, url: String, tx: &mpsc::UnboundedSender<StreamMsg>) {
         let url = url.trim();
         if url.is_empty() {
-            self.push_info(format!("Current host: {}\nUsage: /host <url>", self.client.base));
+            self.push_info(format!(
+                "Current host: {}\nUsage: /host <url>",
+                self.client.base
+            ));
             return;
         }
         if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -1144,9 +1141,7 @@ impl App {
             "which one",
             "which would",
         ];
-        const WH_WORDS: &[&str] = &[
-            "what", "which", "who", "where", "when", "why", "how",
-        ];
+        const WH_WORDS: &[&str] = &["what", "which", "who", "where", "when", "why", "how"];
         let last = self
             .messages
             .iter()
@@ -1172,7 +1167,9 @@ impl App {
         let sentence = trimmed[start..].trim();
         // Open-ended questions ("What…", "Which…", "How…") are not Y/N.
         if let Some(first) = sentence.split_whitespace().next() {
-            let first_lc = first.trim_matches(|c: char| !c.is_alphabetic()).to_lowercase();
+            let first_lc = first
+                .trim_matches(|c: char| !c.is_alphabetic())
+                .to_lowercase();
             if WH_WORDS.iter().any(|w| *w == first_lc) {
                 return false;
             }
@@ -1244,7 +1241,10 @@ impl App {
         if !self.compacting
             && !self.generating
             && self.last_prompt_tokens > crate::compact::AUTO_COMPACT_THRESHOLD
-            && self.messages.iter().any(|m| !m.hidden && m.role == "assistant")
+            && self
+                .messages
+                .iter()
+                .any(|m| !m.hidden && m.role == "assistant")
         {
             self.push_info(format!(
                 "Context at {} tokens — compacting before sending so your next turn has room.",
@@ -1280,17 +1280,12 @@ impl App {
         // trailing empty assistant placeholder is dropped.
         let history: Vec<ChatMessage> = self.messages[..self.messages.len() - 1]
             .iter()
-            .filter(|m| {
-                matches!(m.role.as_str(), "user" | "assistant" | "tool" | "summary")
-            })
+            .filter(|m| matches!(m.role.as_str(), "user" | "assistant" | "tool" | "summary"))
             .map(|m| {
                 if m.role == "summary" {
                     ChatMessage {
                         role: "system".into(),
-                        content: format!(
-                            "(Compacted summary of earlier turns:)\n\n{}",
-                            m.content
-                        ),
+                        content: format!("(Compacted summary of earlier turns:)\n\n{}", m.content),
                         ..m.clone()
                     }
                 } else {
@@ -1399,11 +1394,8 @@ impl App {
         self.extra_models.retain(|m| m.provider != provider_id);
 
         // Fall back the active model if it belonged to this provider.
-        let active_was_provider = self
-            .selected_extra
-            .as_ref()
-            .map(|e| e.provider.as_str())
-            == Some(provider_id);
+        let active_was_provider =
+            self.selected_extra.as_ref().map(|e| e.provider.as_str()) == Some(provider_id);
         if active_was_provider {
             self.selected_extra = None;
             if let Some(first) = self.models.first().cloned() {
@@ -1504,11 +1496,7 @@ impl App {
                 self.disconnect_index = self.disconnect_entries.len().saturating_sub(1);
             }
             KeyCode::Enter => {
-                if let Some(entry) = self
-                    .disconnect_entries
-                    .get(self.disconnect_index)
-                    .cloned()
-                {
+                if let Some(entry) = self.disconnect_entries.get(self.disconnect_index).cloned() {
                     self.mode = Mode::Chat;
                     self.disconnect_by_id(&entry.provider);
                 }

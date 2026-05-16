@@ -155,7 +155,8 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
         // `(screen_y - sidebar_y) + sidebar_scroll`.
         if !is_truncation {
             let logical = (line_offset as u16).saturating_add(1);
-            app.sidebar_targets.push((logical, e.path.clone(), e.is_dir));
+            app.sidebar_targets
+                .push((logical, e.path.clone(), e.is_dir));
         }
     }
 

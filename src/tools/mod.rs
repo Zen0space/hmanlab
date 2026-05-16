@@ -52,7 +52,11 @@ pub(super) async fn confirm(
 ) -> Result<bool> {
     let (tx, rx) = oneshot::channel::<bool>();
     ctx.confirm_tx
-        .send(ConfirmRequest { prompt, diff, responder: tx })
+        .send(ConfirmRequest {
+            prompt,
+            diff,
+            responder: tx,
+        })
         .map_err(|_| anyhow!("UI channel closed before confirmation"))?;
     Ok(rx.await.unwrap_or(false))
 }
@@ -84,10 +88,19 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: &ToolContext) -> Result
         "find_files" => read::tool_find_files(args, ctx).await,
         "git_status" => git::run_git(ctx, &["status", "--porcelain=v1", "-b"]).await,
         "git_log" => {
-            let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(10).clamp(1, 100);
+            let limit = args
+                .get("limit")
+                .and_then(Value::as_i64)
+                .unwrap_or(10)
+                .clamp(1, 100);
             git::run_git_owned(
                 ctx,
-                vec!["log".into(), "--oneline".into(), "-n".into(), limit.to_string()],
+                vec![
+                    "log".into(),
+                    "--oneline".into(),
+                    "-n".into(),
+                    limit.to_string(),
+                ],
             )
             .await
         }

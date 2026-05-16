@@ -147,9 +147,7 @@ fn truncate_diff(lines: Vec<DiffLine>, added: usize, removed: usize) -> Vec<Diff
     let mut head: Vec<DiffLine> = lines.into_iter().take(MAX_DIFF_LINES).collect();
     head.push(DiffLine {
         kind: DiffLineKind::Summary,
-        text: format!(
-            "…diff truncated — full change is +{added} -{removed} lines",
-        ),
+        text: format!("…diff truncated — full change is +{added} -{removed} lines",),
     });
     head
 }
