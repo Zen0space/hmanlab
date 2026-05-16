@@ -1,16 +1,16 @@
 name: release
 
-# Triggered by pushing a `v*` tag. Builds the Rust binary for every
-# supported (OS, arch), drops each one into the matching
-# `npm/@hmanlab/<plat>-<arch>/bin/` directory, then publishes every
-# subpackage and the umbrella to npm. The publish step is skipped when
-# `NPM_TOKEN` is missing so forks can still build artifacts.
+# Triggered when a GitHub Release is *published* (not on draft save and not
+# on bare tag pushes). This lets you draft a release with notes first,
+# review them, then click "Publish release" to actually fire the build +
+# npm publish pipeline. Builds the Rust binary for every supported
+# (OS, arch), drops each into the matching `npm/@hmanlab/<plat>-<arch>/bin/`
+# directory, then publishes every subpackage and the umbrella to npm.
 
 on:
-  push:
-    tags:
-      - 'v*'
-  # Allow a manual rerun from the Actions tab without retagging.
+  release:
+    types: [published]
+  # Allow a manual rerun from the Actions tab without re-publishing.
   workflow_dispatch: {}
 
 permissions:
@@ -109,7 +109,7 @@ jobs:
       id-token: write
     # Skip publish on workflow_dispatch (manual rebuilds) and on forks
     # that haven't configured NPM_TOKEN — but always run the build matrix.
-    if: github.event_name == 'push' && github.repository_owner == 'rekabytes'
+    if: github.event_name == 'release' && github.repository_owner == 'rekabytes'
     steps:
       - uses: actions/checkout@v4
 
