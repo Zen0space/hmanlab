@@ -703,8 +703,7 @@ impl App {
                     let cmd = SLASH_COMMANDS[idx].name;
                     // Slash trigger always starts at column 0 — jump there
                     // and delete the `/<filter>` we're replacing.
-                    self.input
-                        .move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+                    self.input.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
                     self.input.delete_str(col);
                     self.input.insert_str(format!("/{cmd} "));
                 }
