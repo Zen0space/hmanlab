@@ -1,6 +1,6 @@
 # hmanlab
 
-A terminal UI for chatting with local [Ollama](https://ollama.com) models — with agentic tool use, memory recall, and session persistence via [hmanlab-api](https://be-ai.senireka.my).
+A terminal UI for chatting with local and cloud LLMs — with agentic tool use, persistent memory, auto-compaction, and session persistence via [hmanlab-api](https://be-ai.senireka.my).
 
 Built in Rust with [ratatui](https://ratatui.rs).
 
@@ -12,14 +12,18 @@ Built in Rust with [ratatui](https://ratatui.rs).
 ## Features
 
 - **Streaming replies** — tokens appear as they arrive from Ollama or any OpenAI-compatible endpoint
+- **Multiple providers** — local Ollama, Ollama Cloud, z.ai (subscription & usage-based), and OpenCode Go — all from one TUI
 - **Agentic tool calls** — the model can read files, explore directories, run git commands, edit and write files, execute shell commands, and recall persistent memories (each destructive action confirmed by you)
 - **Persistent memory** — save and recall durable facts about you, your project, or how to behave across sessions
+- **Auto-compaction** — when the context window fills up, old turns are automatically compressed into a summary so the conversation can keep going
 - **Session persistence** — chats are saved to the hmanlab-api backend over HTTPS so future clients (mobile, web) can share your history
 - **Session browsing** — `/sessions` to list, `/load <id>` to resume, `/more` to page through older messages
+- **Sidebar + file viewer** — browse your workspace tree and open files inline without leaving the TUI
 - **Inline markdown** — `**bold**` and `` `code` `` rendered with style
+- **Thinking block folding** — `<think?>…</think?>` reasoning blocks collapse by default; click or Ctrl+T to expand
 - **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse
 - **Y/N quick-reply** — when the model asks a yes/no question, just press Y or N
-- **First-run wizard** — guided setup for API key and Ollama URL on first launch
+- **First-run wizard** — guided setup for API key and provider selection on first launch
 - **Token tracking** — running prompt + completion token count shown in the header
 
 ## Security model
@@ -66,8 +70,8 @@ cargo build --release
 
 When you launch hmanlab without a configured API key, an interactive wizard walks you through:
 
-1. **Ollama URL** — defaults to `http://localhost:11434`
-2. **hmanlab API key** — validates against the backend and saves to `~/.config/hmanlab/config.json` (mode 600)
+1. **hmanlab API key** — validates against the backend and saves to `~/.config/hmanlab/config.json` (mode 600)
+2. **Provider selection** — optionally add a z.ai subscription key, z.ai usage-based key, or local Ollama URL. Skip everything and configure later from inside the TUI
 
 Config is stored at `~/.config/hmanlab/config.json`. You can also set everything via CLI flags or environment variables.
 
@@ -107,23 +111,27 @@ HMANLAB_API_KEY=bai_yourkeyhere ./target/release/hmanlab \
 | `/models`, `/ls` | List available models |
 | `/host <url>` | Change Ollama host |
 | `/workspace <path>` | Change agent workspace |
+| `/compact` | Manually compact conversation history |
+| `/disconnect` | Remove a BYOK provider and its models |
 | `/clear` | Clear visible chat (session keeps going) |
 | `/quit`, `/exit` | Quit (Esc) |
 
 ## Key bindings
 
 | Key | Action |
-|---|---Enter| | Send message |
+|---|---|
+| `Enter` | Send message |
 | `Shift+Enter` | Newline in input |
 | `Ctrl+N` | New session |
 | `Ctrl+M` | Open model picker |
-| `Ctrl+T` | Fold/unfold all tool blocks |
+| `Ctrl+T` | Fold/unfold all tool blocks and thinking blocks |
 | `Ctrl+C` | Cancel generation (or quit when idle) |
 | `Ctrl+L` | Clear chat history |
-| `Esc` | Quit |
+| `Esc` | Quit (or close viewer/sidebar popup) |
 | `Mouse wheel` | Scroll chat |
 | `Drag` | Select text; release copies to clipboard (OSC 52) |
 | `Click` on tool block | Toggle fold |
+| `Click` on thinking block | Toggle fold |
 | `PgUp/PgDn`, `Home/End` | Scroll |
 | `Y` / `N` | Quick-reply when AI asks a yes/no question |
 
