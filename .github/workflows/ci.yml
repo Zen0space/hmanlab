@@ -9,6 +9,9 @@ on:
 
 permissions:
   contents: read
+  # rustsec/audit-check posts the audit summary as a GitHub check run,
+  # which requires write access to the Checks API.
+  checks: write
 
 jobs:
   check:
