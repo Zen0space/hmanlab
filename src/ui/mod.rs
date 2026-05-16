@@ -96,7 +96,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let total_tokens = app.total_prompt_tokens + app.total_completion_tokens;
     let tokens_label = format_tokens(total_tokens);
 
-    let text = Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             " hmanlab ",
             Style::default()
@@ -118,8 +118,21 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
             format!("tokens: {tokens_label}"),
             Style::default().fg(Color::DarkGray),
         ),
-    ]);
-    f.render_widget(Paragraph::new(text), area);
+    ];
+
+    // Background update check tagged us — surface the upgrade hint at
+    // the right end of the header so it's visible but never in the way.
+    if let Some(latest) = app.update_available.as_deref() {
+        spans.push(Span::raw("  ·  "));
+        spans.push(Span::styled(
+            format!("v{latest} available — npm i -g hmanlab"),
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 fn render_status(f: &mut Frame, area: Rect, app: &App) {

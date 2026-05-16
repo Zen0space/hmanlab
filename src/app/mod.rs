@@ -129,6 +129,9 @@ pub enum StreamMsg {
     /// Compaction failed — surface the error and leave the existing
     /// history untouched.
     CompactionError(String),
+    /// Background update check found a newer hmanlab on npm. Renders
+    /// as a one-line notice in the header — never blocks anything.
+    UpdateAvailable(String),
     /// Begin executing a tool.
     ToolStart {
         name: String,
@@ -347,6 +350,9 @@ pub struct App {
     pub(super) current_task: Option<JoinHandle<()>>,
     pub api: Option<api::Client>,
     pub api_tx: Option<mpsc::UnboundedSender<ApiOp>>,
+    /// Newer hmanlab version advertised by npm, if the background
+    /// update check found one. Cleared until the check completes.
+    pub update_available: Option<String>,
 }
 
 impl App {
@@ -437,6 +443,7 @@ impl App {
             current_task: None,
             api,
             api_tx,
+            update_available: None,
         }
     }
 }

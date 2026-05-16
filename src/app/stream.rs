@@ -249,6 +249,9 @@ impl App {
                 self.push_info(format!("Compaction failed: {e}. History unchanged."));
                 self.status = format!("Compact error: {e}");
             }
+            StreamMsg::UpdateAvailable(latest) => {
+                self.update_available = Some(latest);
+            }
             StreamMsg::Models { models, base } => {
                 let n = models.len();
                 self.models = models;

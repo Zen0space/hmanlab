@@ -49,3 +49,8 @@ jobs:
         uses: rustsec/audit-check@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          # Fail only on real vulnerabilities. Informational advisories
+          # (unmaintained / unsound deps) still get reported in the
+          # check summary but don't block the PR — they're often
+          # transitive deps we can't fix in this repo.
+          denyWarnings: false

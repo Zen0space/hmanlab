@@ -35,7 +35,11 @@ jobs:
             cross: true
             binary: hmanlab
           - target: x86_64-apple-darwin
-            runner: macos-13
+            # macos-13 (Intel) runners are scarce and jobs get stuck in
+            # the queue. Use macos-14 (Apple Silicon) and cross-compile
+            # to x86_64-apple-darwin via `cargo build --target` — Xcode
+            # ships both SDKs so this Just Works from arm64 hardware.
+            runner: macos-14
             pkg: darwin-x64
             cross: false
             binary: hmanlab

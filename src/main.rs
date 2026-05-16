@@ -22,6 +22,7 @@ mod ollama;
 mod openai_compat;
 mod tools;
 mod ui;
+mod update_check;
 
 use app::{App, AppAction, StreamMsg};
 
@@ -189,6 +190,17 @@ async fn main() -> Result<()> {
 async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: App) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<StreamMsg>();
     let mut events = EventStream::new();
+
+    // Background update check. Sends a single message if (and only if) npm
+    // has a version newer than the compiled-in one. Skipped on debug builds
+    // and cached for 24 h, so this is at most one HTTP hit per release-day
+    // per user — never blocks the TUI from starting.
+    let update_tx = tx.clone();
+    tokio::spawn(async move {
+        if let Some(latest) = update_check::check().await {
+            let _ = update_tx.send(StreamMsg::UpdateAvailable(latest));
+        }
+    });
 
     // Animation ticker: fires every 120 ms but is only polled while the agent
     // is generating or a tool is running (see the `if` guard on its select!
