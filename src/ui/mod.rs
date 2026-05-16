@@ -19,6 +19,7 @@ mod chat;
 mod markdown;
 mod popups;
 mod sidebar;
+pub(crate) mod theme;
 mod viewer;
 
 pub(crate) use sidebar::initial_expanded;
@@ -74,6 +75,13 @@ pub fn render(f: &mut Frame, app: &mut App) {
     chat::render_input(f, chunks[2], app);
     render_status(f, chunks[3], app);
 
+    // Inline autocomplete (slash / @ mention) — render LAST so it floats
+    // above the chat panel without being clipped by it. Anchored just
+    // above the input box.
+    if app.inline_popup.is_open() {
+        popups::render_inline_popup(f, chunks[2], app);
+    }
+
     if app.mode == Mode::ModelPicker {
         popups::render_picker(f, area, app);
     }
@@ -96,38 +104,42 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let total_tokens = app.total_prompt_tokens + app.total_completion_tokens;
     let tokens_label = format_tokens(total_tokens);
 
+    let sep = Span::styled("  •  ", Style::default().fg(theme::color::FG_DIMMER));
+
     let mut spans = vec![
         Span::styled(
             " hmanlab ",
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(theme::color::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  model: "),
+        Span::raw("  "),
+        Span::styled("model: ", Style::default().fg(theme::color::FG_DIM)),
         Span::styled(
             app.model.as_str(),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme::color::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw("  host: "),
-        Span::styled(host_short, Style::default().fg(Color::DarkGray)),
-        Span::raw("  ·  "),
+        sep.clone(),
+        Span::styled("host: ", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(host_short, Style::default().fg(theme::color::FG)),
+        sep.clone(),
         Span::styled(
             format!("tokens: {tokens_label}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme::color::FG_DIM),
         ),
     ];
 
     // Background update check tagged us — surface the upgrade hint at
     // the right end of the header so it's visible but never in the way.
     if let Some(latest) = app.update_available.as_deref() {
-        spans.push(Span::raw("  ·  "));
+        spans.push(sep);
         spans.push(Span::styled(
             format!("v{latest} available — npm i -g hmanlab"),
             Style::default()
-                .fg(Color::Green)
+                .fg(theme::color::SUCCESS)
                 .add_modifier(Modifier::BOLD),
         ));
     }
@@ -136,18 +148,18 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, app: &App) {
-    let help = " /help · drag:select+copy · wheel:scroll · click tool to fold · Ctrl+T:fold all ";
+    let help = " /help • drag:copy • wheel:scroll • Ctrl+T:fold ";
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
     f.render_widget(
-        Paragraph::new(app.status.as_str()).style(Style::default().fg(Color::Gray)),
+        Paragraph::new(app.status.as_str()).style(Style::default().fg(theme::color::FG)),
         chunks[0],
     );
     f.render_widget(
         Paragraph::new(help)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme::color::FG_DIM))
             .alignment(Alignment::Right),
         chunks[1],
     );

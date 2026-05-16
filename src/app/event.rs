@@ -16,6 +16,7 @@ use crate::api::ApiOp;
 use crate::config::ExtraModel;
 use crate::ollama::{ChatMessage, Client};
 
+use super::inline::{self, FilePopup, InlinePopup, SlashPopup, SLASH_COMMANDS};
 use super::{
     fresh_textarea, AddModelStep, App, AppAction, DisconnectEntry, Mode, PickerEntry, StreamMsg,
 };
@@ -477,6 +478,38 @@ impl App {
             return self.handle_viewer_key(key);
         }
 
+        // Inline autocomplete popup (slash / @ mention) intercept — must
+        // come before the global Esc-quit, Up/Down scroll, and Enter-submit
+        // handlers so the popup gets first dibs on its own navigation keys.
+        if self.inline_popup.is_open() && key.modifiers.is_empty() {
+            match key.code {
+                KeyCode::Esc => {
+                    self.inline_popup = InlinePopup::None;
+                    return AppAction::Continue;
+                }
+                KeyCode::Up => {
+                    self.inline_popup_select_prev();
+                    return AppAction::Continue;
+                }
+                KeyCode::Down => {
+                    self.inline_popup_select_next();
+                    return AppAction::Continue;
+                }
+                KeyCode::Tab => {
+                    self.inline_popup_complete();
+                    return AppAction::Continue;
+                }
+                KeyCode::Enter => {
+                    // Completion-on-Enter — popup absorbs Enter, user
+                    // presses Enter again to actually submit. Matches the
+                    // shell-autocomplete convention.
+                    self.inline_popup_complete();
+                    return AppAction::Continue;
+                }
+                _ => {}
+            }
+        }
+
         // Y/N quick-reply intercept — only when the AI just asked a yes/no
         // question and the input is empty. Plain key, no modifiers.
         if self.yn_pending
@@ -586,7 +619,115 @@ impl App {
 
         let input: Input = key.into();
         self.input.input(input);
+        // After the textarea consumed the key, re-evaluate whether a `/`
+        // slash command or `@` file mention is being typed and surface /
+        // dismiss the popup accordingly.
+        self.update_inline_popup();
         AppAction::Continue
+    }
+
+    /// Refresh `inline_popup` based on the current input state. Called
+    /// after every key the textarea consumed.
+    fn update_inline_popup(&mut self) {
+        let first = self.input.lines().first().cloned().unwrap_or_default();
+        let (row, col) = self.input.cursor();
+        if row != 0 {
+            self.inline_popup = InlinePopup::None;
+            return;
+        }
+        match inline::detect_trigger(&first, col) {
+            Some(('/', filter)) => match &mut self.inline_popup {
+                InlinePopup::Slash(p) => p.set_filter(filter),
+                _ => self.inline_popup = InlinePopup::Slash(SlashPopup::new(filter)),
+            },
+            Some(('@', filter)) => match &mut self.inline_popup {
+                InlinePopup::File(p) => p.set_filter(filter),
+                _ => {
+                    self.inline_popup = InlinePopup::File(FilePopup::new(filter, &self.workspace));
+                }
+            },
+            _ => {
+                self.inline_popup = InlinePopup::None;
+            }
+        }
+    }
+
+    fn inline_popup_select_prev(&mut self) {
+        match &mut self.inline_popup {
+            InlinePopup::Slash(p) => {
+                if p.index > 0 {
+                    p.index -= 1;
+                }
+            }
+            InlinePopup::File(p) => {
+                if p.index > 0 {
+                    p.index -= 1;
+                }
+            }
+            InlinePopup::None => {}
+        }
+    }
+
+    fn inline_popup_select_next(&mut self) {
+        match &mut self.inline_popup {
+            InlinePopup::Slash(p) => {
+                if p.index + 1 < p.matches.len() {
+                    p.index += 1;
+                }
+            }
+            InlinePopup::File(p) => {
+                if p.index + 1 < p.matches.len() {
+                    p.index += 1;
+                }
+            }
+            InlinePopup::None => {}
+        }
+    }
+
+    /// Insert the currently-highlighted completion into the input at the
+    /// trigger position, replacing the partial filter the user typed.
+    /// Closes the popup either way.
+    ///
+    /// Subtlety: tui-textarea's `delete_str(n)` deletes n chars **after**
+    /// the cursor, not before, so we jump the cursor to the start of the
+    /// range we want to replace, delete forward, then insert.
+    fn inline_popup_complete(&mut self) {
+        let (row, col) = self.input.cursor();
+        if row != 0 {
+            self.inline_popup = InlinePopup::None;
+            return;
+        }
+        match &self.inline_popup {
+            InlinePopup::Slash(p) => {
+                if let Some(&idx) = p.matches.get(p.index) {
+                    let cmd = SLASH_COMMANDS[idx].name;
+                    // Slash trigger always starts at column 0 — jump there
+                    // and delete the `/<filter>` we're replacing.
+                    self.input
+                        .move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+                    self.input.delete_str(col);
+                    self.input.insert_str(format!("/{cmd} "));
+                }
+            }
+            InlinePopup::File(p) => {
+                if let Some(&idx) = p.matches.get(p.index) {
+                    let path = p.workspace_files[idx].to_string_lossy().to_string();
+                    let first = self.input.lines().first().cloned().unwrap_or_default();
+                    let head_len = col.min(first.chars().count());
+                    let head: String = first.chars().take(head_len).collect();
+                    if let Some(at_byte) = head.rfind('@') {
+                        let at_char_pos = head[..at_byte].chars().count();
+                        let to_delete = head_len.saturating_sub(at_char_pos);
+                        self.input
+                            .move_cursor(tui_textarea::CursorMove::Jump(0, at_char_pos as u16));
+                        self.input.delete_str(to_delete);
+                        self.input.insert_str(format!("@{path} "));
+                    }
+                }
+            }
+            InlinePopup::None => {}
+        }
+        self.inline_popup = InlinePopup::None;
     }
 
     fn submit(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) -> AppAction {

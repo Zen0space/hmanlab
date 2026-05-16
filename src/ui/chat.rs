@@ -4,13 +4,14 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Padding, Paragraph, Wrap},
     Frame,
 };
 
 use crate::app::App;
 
 use super::markdown::{parse_inline_md, wrap_styled_segments};
+use super::theme;
 
 /// Period of one full breath, in animation ticks. The ticker fires every
 /// 120 ms (see `main::run`), so 30 ticks ≈ 3.6 s — slow enough to read as
@@ -26,14 +27,16 @@ fn breath_color(tick: u64, lo: (u8, u8, u8), hi: (u8, u8, u8)) -> Color {
     Color::Rgb(lerp(lo.0, hi.0), lerp(lo.1, hi.1), lerp(lo.2, hi.2))
 }
 
-/// Cyan-tinted breath used for the "thinking" indicator.
+/// Sky-tinted breath used for the "thinking" indicator. Pulses between a
+/// muted version of the sky-blue role color and the full sky color.
 fn thinking_breath(tick: u64) -> Color {
-    breath_color(tick, (40, 95, 115), (130, 230, 255))
+    breath_color(tick, (55, 90, 105), (137, 220, 235))
 }
 
-/// Blue-tinted breath used for the active tool row.
+/// Peach-tinted breath used for the active tool row — peach is the
+/// theme's primary accent, so an in-flight tool reads as the focal point.
 fn tool_breath(tick: u64) -> Color {
-    breath_color(tick, (45, 90, 150), (160, 200, 255))
+    breath_color(tick, (115, 80, 60), (250, 179, 135))
 }
 
 /// Boil a tool call down to a `verb · primary-arg` summary the user can scan
@@ -122,10 +125,8 @@ fn args_for_tool_msg(
 }
 
 pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" chat ")
-        .padding(Padding::horizontal(1));
+    // Chat is the always-focused surface — wear the active border colour.
+    let block = theme::panel_block("chat", true).padding(Padding::horizontal(1));
     let inner = block.inner(area);
 
     // Stash inner geometry so the mouse selection code can hit-test.
@@ -163,10 +164,6 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         // assistant message, and the trailing `(N lines)`) into one row that
         // reads as `verb · primary-arg` with state encoded in glyph + color.
         let (label, color) = match msg.role.as_str() {
-            "user" => ("You".to_string(), Color::Green),
-            "assistant" => ("AI".to_string(), Color::Cyan),
-            "info" => ("system".to_string(), Color::Magenta),
-            "summary" => ("compacted summary".to_string(), Color::Magenta),
             "tool" => {
                 let summary = tool_summary(
                     msg.name.as_deref().unwrap_or("tool"),
@@ -192,15 +189,18 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                     format!("  ({body_lines}L)")
                 };
                 let color = if tool_errored {
-                    Color::Red
+                    theme::color::TOOL_ERROR
                 } else {
-                    Color::Blue
+                    theme::color::TOOL
                 };
                 (format!("{glyph} {summary}{suffix}"), color)
             }
-            _ => ("?".to_string(), Color::Gray),
+            other => {
+                let (text, c) = theme::role_label(other);
+                (text.to_string(), c)
+            }
         };
-        let header_text = format!("● {label}");
+        let header_text = label.clone();
         text_lines.push(header_text.clone());
         let header_style = if is_active_tool {
             Style::default()
@@ -248,8 +248,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
             lines.push(Line::from(Span::styled(
                 header_text,
                 Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::DIM),
+                    .fg(theme::color::FG_DIM)
+                    .add_modifier(Modifier::ITALIC),
             )));
             if thought_expanded {
                 for paragraph in think.split('\n') {
@@ -259,8 +259,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         continue;
                     }
                     let body_style = Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM);
+                        .fg(theme::color::FG_DIM)
+                        .add_modifier(Modifier::ITALIC);
                     let segments = parse_inline_md(paragraph, body_style);
                     let wrapped = wrap_styled_segments(segments, content_width);
                     for spans in wrapped {
@@ -306,11 +306,11 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                 }
             } else {
                 let base_style = match msg.role.as_str() {
-                    "info" => Style::default().fg(Color::Magenta),
-                    "summary" => Style::default().fg(Color::Magenta),
-                    "tool" if tool_errored => Style::default().fg(Color::Red),
-                    "tool" => Style::default().fg(Color::Blue),
-                    _ => Style::default(),
+                    "info" => Style::default().fg(theme::color::SYSTEM),
+                    "summary" => Style::default().fg(theme::color::SYSTEM),
+                    "tool" if tool_errored => Style::default().fg(theme::color::TOOL_ERROR),
+                    "tool" => Style::default().fg(theme::color::TOOL),
+                    _ => Style::default().fg(theme::color::FG),
                 };
                 for paragraph in trimmed.split('\n') {
                     if paragraph.is_empty() {
@@ -409,28 +409,39 @@ pub(super) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
     let first_line = app.input.lines().first().cloned().unwrap_or_default();
     let is_cmd = first_line.trim_start().starts_with('/');
 
+    // Title encodes input mode; border colour echoes it so the box state
+    // is scannable from across the screen.
     let (title, border_color) = if app.generating {
         (
-            " input — generating, Ctrl+C to cancel ".to_string(),
-            Color::Yellow,
+            "❯ generating, Ctrl+C to cancel".to_string(),
+            theme::color::WARNING,
         )
     } else if is_cmd {
-        (" command — Enter to run ".to_string(), Color::Magenta)
+        (
+            "❯ command — Enter to run".to_string(),
+            theme::color::ACCENT_ALT,
+        )
     } else if app.yn_pending {
         (
-            " input — [Y] yes  ·  [N] no  ·  type to override ".to_string(),
-            Color::Cyan,
+            "❯ [Y] yes  •  [N] no  •  type to override".to_string(),
+            theme::color::ASSISTANT,
         )
     } else {
-        (" input ".to_string(), Color::White)
+        ("❯ message".to_string(), theme::color::ACCENT)
     };
 
-    app.input.set_block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
-            .title(title),
-    );
+    let block = ratatui::widgets::Block::default()
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .title(Span::styled(
+            format!(" {title} "),
+            Style::default()
+                .fg(border_color)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .padding(Padding::horizontal(1));
+    app.input.set_block(block);
     f.render_widget(&app.input, area);
 }
 

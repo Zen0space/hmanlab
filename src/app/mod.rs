@@ -15,9 +15,11 @@ use crate::tools;
 
 mod backend;
 mod event;
+pub mod inline;
 mod stream;
 
 pub use backend::LlmBackend;
+pub use inline::{InlinePopup, SLASH_COMMANDS};
 
 /// Build a TextArea with no current-line underline (tui-textarea's default
 /// behavior is to underline the cursor row, which looks like a stray line in
@@ -353,6 +355,10 @@ pub struct App {
     /// Newer hmanlab version advertised by npm, if the background
     /// update check found one. Cleared until the check completes.
     pub update_available: Option<String>,
+    /// Inline autocomplete popup overlaying the chat surface, if any.
+    /// `Slash` when the user is typing `/<command>`, `File` when they're
+    /// typing `@<path>`. Mutually exclusive; `None` otherwise.
+    pub inline_popup: InlinePopup,
 }
 
 impl App {
@@ -444,6 +450,7 @@ impl App {
             api,
             api_tx,
             update_available: None,
+            inline_popup: InlinePopup::None,
         }
     }
 }

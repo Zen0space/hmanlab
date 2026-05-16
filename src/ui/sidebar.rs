@@ -5,15 +5,16 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Padding, Paragraph, Wrap},
     Frame,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::app::App;
+use crate::ui::theme;
 
 /// Hard cap on total entries — protects against a pathological expansion
 /// (deeply nested monorepo) from blowing up the render. A trailing `…` row
@@ -84,10 +85,10 @@ pub(crate) fn initial_expanded(workspace: &Path) -> HashSet<PathBuf> {
 }
 
 pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" workspace ")
-        .padding(Padding::horizontal(1));
+    // Sidebar is "passive" — chat is always the focus when sidebar is
+    // visible — so keep its border in the idle color so the chat panel
+    // pops as the active surface.
+    let block = theme::panel_block("workspace", false).padding(Padding::horizontal(1));
     let inner = block.inner(area);
 
     // Stash inner geometry so `event::handle_mouse` can hit-test clicks
@@ -113,7 +114,7 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
     lines.push(Line::from(Span::styled(
         truncate(&format!("▾ {basename}/"), max_w),
         Style::default()
-            .fg(Color::Cyan)
+            .fg(theme::color::ACCENT)
             .add_modifier(Modifier::BOLD),
     )));
 
@@ -139,11 +140,13 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
         let max_label = max_w.saturating_sub(indent.chars().count());
         let display = truncate(&label, max_label);
         let style = if is_truncation {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme::color::FG_DIMMER)
         } else if e.is_dir {
-            Style::default().fg(Color::Yellow)
+            Style::default()
+                .fg(theme::color::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme::color::FG)
         };
         lines.push(Line::from(vec![
             Span::raw(indent),

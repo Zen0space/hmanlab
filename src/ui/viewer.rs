@@ -4,25 +4,23 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph, Wrap},
+    widgets::{Padding, Paragraph, Wrap},
     Frame,
 };
 
 use crate::app::App;
+
+use super::theme;
 
 pub(super) fn render_viewer(f: &mut Frame, area: Rect, app: &mut App) {
     let Some(file) = app.open_file.as_mut() else {
         return;
     };
 
-    let title = format!(" {} — Esc to close ", file.display);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(title)
-        .border_style(Style::default().fg(Color::Cyan))
-        .padding(Padding::horizontal(1));
+    let title = format!("{} — Esc to close", file.display);
+    let block = theme::panel_block(&title, true).padding(Padding::horizontal(1));
     let inner = block.inner(area);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -30,7 +28,9 @@ pub(super) fn render_viewer(f: &mut Frame, area: Rect, app: &mut App) {
     if let Some(err) = &file.error {
         lines.push(Line::from(Span::styled(
             err.clone(),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::color::ERROR)
+                .add_modifier(Modifier::BOLD),
         )));
     } else {
         // Compute line-number gutter width based on the file's line count so
@@ -43,9 +43,9 @@ pub(super) fn render_viewer(f: &mut Frame, area: Rect, app: &mut App) {
             // Keep the raw line as a single span — no markdown parsing, no
             // wrap interpretation. The Paragraph wrap below handles overflow.
             lines.push(Line::from(vec![
-                Span::styled(n, Style::default().fg(Color::DarkGray)),
+                Span::styled(n, Style::default().fg(theme::color::FG_DIM)),
                 Span::raw("  "),
-                Span::raw(raw.to_string()),
+                Span::styled(raw.to_string(), Style::default().fg(theme::color::FG)),
             ]));
         }
     }
