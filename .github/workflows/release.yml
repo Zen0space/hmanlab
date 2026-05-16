@@ -101,6 +101,12 @@ jobs:
     name: publish to npm
     needs: build
     runs-on: ubuntu-latest
+    # `npm publish --provenance` mints a GitHub OIDC token, which needs
+    # write access on the id-token permission. contents:read is the
+    # bare minimum to checkout the repo.
+    permissions:
+      contents: read
+      id-token: write
     # Skip publish on workflow_dispatch (manual rebuilds) and on forks
     # that haven't configured NPM_TOKEN — but always run the build matrix.
     if: github.event_name == 'push' && github.repository_owner == 'rekabytes'
