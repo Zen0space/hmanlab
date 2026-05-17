@@ -66,4 +66,4 @@ echo
 echo "Done. Push with:"
 echo "  git push && git push --tags"
 echo
-echo "Then watch https://github.com/rekabytes/hmanlab/actions"
+echo "Then watch https://github.com/hmanlab/hmanlab/actions"

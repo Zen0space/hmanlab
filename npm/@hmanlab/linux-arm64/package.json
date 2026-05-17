@@ -1,12 +1,12 @@
 {
   "name": "@hmanlab/linux-arm64",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Prebuilt hmanlab binary for linux-arm64. Pulled in automatically by the `hmanlab` package.",
-  "homepage": "https://github.com/rekabytes/hmanlab",
+  "homepage": "https://github.com/hmanlab/hmanlab",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rekabytes/hmanlab.git"
+    "url": "git+https://github.com/hmanlab/hmanlab.git"
   },
   "os": ["linux"],
   "cpu": ["arm64"],

@@ -1,0 +1,8 @@
+# OSV-Scanner config (https://google.github.io/osv-scanner/configuration/).
+# Read by the Vulnerabilities check in OpenSSF Scorecard, scheduled in
+# .github/workflows/scorecard.yml. Mirror of .cargo/audit.toml so both
+# gates stay consistent.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = "paste 1.0.15 is unmaintained (repo archived). INFO-severity, no CVE, no fixed version exists. Transitive via ratatui 0.29; revisit when ratatui drops the dep."

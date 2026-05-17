@@ -1,0 +1,11 @@
+# Advisory ignore list for cargo-audit (read by rustsec/audit-check in
+# .github/workflows/ci.yml). Keep this list tiny — every entry is a
+# deliberate, documented exception.
+
+[advisories]
+ignore = [
+    # paste 1.0.15 — unmaintained (repo archived). INFO-severity, not a CVE.
+    # Pulled in transitively by ratatui 0.29; no fixed version exists.
+    # Re-evaluate when ratatui drops the paste dep or a maintained fork ships.
+    "RUSTSEC-2024-0436",
+]

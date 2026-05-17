@@ -6,13 +6,13 @@
 # whether that directory is on your PATH.
 #
 # Usage:
-#   curl -fsSL https://github.com/rekabytes/hmanlab/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/hmanlab/hmanlab/releases/latest/download/install.sh | sh
 #
 # Override install location with HMANLAB_INSTALL_DIR=/usr/local/bin sh.
 
 set -eu
 
-REPO="rekabytes/hmanlab"
+REPO="hmanlab/hmanlab"
 INSTALL_DIR="${HMANLAB_INSTALL_DIR:-$HOME/.local/bin}"
 
 # OS detection — match what release.yml ships.

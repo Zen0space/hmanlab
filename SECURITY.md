@@ -8,7 +8,7 @@ Only the latest minor release receives security fixes. If you're more than one m
 
 If you believe you've found a security issue in hmanlab, please **do not** open a public GitHub issue. Instead, either:
 
-- Open a private advisory: <https://github.com/rekabytes/hmanlab/security/advisories/new>
+- Open a private advisory: <https://github.com/hmanlab/hmanlab/security/advisories/new>
 - Or email <hello@rekabytes.com> with the subject line `hmanlab security`.
 
 Please include:

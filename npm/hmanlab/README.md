@@ -31,7 +31,7 @@ Prebuilt binaries ship for:
 - `darwin-x64`, `darwin-arm64`
 - `win32-x64`
 
-On other platforms, `npm install` will succeed but `hmanlab` will print a friendly "no prebuilt binary" message and exit. Build from source via `cargo install --git https://github.com/rekabytes/hmanlab`.
+On other platforms, `npm install` will succeed but `hmanlab` will print a friendly "no prebuilt binary" message and exit. Build from source via `cargo install --git https://github.com/hmanlab/hmanlab`.
 
 ## Where does `.hmanlab/` live?
 
@@ -44,4 +44,4 @@ User-scope state (cross-project preferences, identity) always lives at `~/.hmanl
 
 ## License
 
-MIT. See https://github.com/rekabytes/hmanlab for source.
+MIT. See https://github.com/hmanlab/hmanlab for source.

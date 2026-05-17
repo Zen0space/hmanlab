@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-05-18
+
+### Fixed
+- **npm publish unblocked (third time's the charm).** The 0.1.7 publish job got past the OIDC 404 from 0.1.6 but failed with `E422 Unprocessable Entity — Error verifying sigstore provenance bundle: Failed to validate repository information: package.json: "repository.url" is "git+https://github.com/rekabytes/hmanlab.git", expected to match "https://github.com/hmanlab/hmanlab" from provenance`. npm cross-checks the package manifest's `repository.url` against the GitHub repo claim in the OIDC provenance bundle; the manifests still pointed at the pre-transfer `rekabytes/hmanlab` URL while the bundle (minted from the new repo location) said `hmanlab/hmanlab`. All `repository.url` / `homepage` / `bugs.url` fields across the umbrella `hmanlab` and the 5 `@hmanlab/<plat>` manifests now point at `hmanlab/hmanlab`. Same retry-loop-poisons-sigstore issue forced 0.1.7 to be abandoned (`@hmanlab/linux-x64@0.1.7` has a tlog entry that can never be republished); 0.1.8 is a fresh version so sigstore accepts new provenance.
+- Updated stale `rekabytes/hmanlab` URLs in `Cargo.toml` (repository / homepage / documentation), `README.md` (CI + downloads badges, install/from-source rows), `install.sh` (`REPO`), `SECURITY.md` advisory link, `.github/ISSUE_TEMPLATE/config.yml`, `scripts/release.sh`, and the per-platform `npm/@hmanlab/*/README.md` files. CHANGELOG compare-links for historical releases left untouched (those refer to where the commits actually lived).
+
+### Security
+- Suppress `RUSTSEC-2024-0436` in cargo-audit (`.cargo/audit.toml`) and OSV-Scanner (`osv-scanner.toml`). The `paste` crate is unmaintained (INFO severity, no CVE, no fixed version possible since the repo is archived). Pulled in transitively via `ratatui 0.29`; will revisit if ratatui drops the dep or a maintained fork ships.
+- `RUSTSEC-2026-0002` (`lru` unsound `IterMut`, real Stacked Borrows UB) **remains open**. The fix needs `ratatui >= 0.30` which requires `tui-textarea >= 0.8` — not yet released by upstream `rhysd/tui-textarea`. Tracking; will land in a follow-up release once `tui-textarea 0.8` ships.
+
 ## [0.1.7] - 2026-05-18
 
 ### Fixed
@@ -83,6 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run wizard for Ollama URL + hmanlab-api key, saved to `~/.config/hmanlab/config.json` (mode 600).
 - npm packaging via the per-arch optional-dependency pattern: umbrella `hmanlab` + `@hmanlab/{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}`.
 
+[0.1.8]: https://github.com/hmanlab/hmanlab/compare/0.1.7...0.1.8
 [0.1.7]: https://github.com/hmanlab/hmanlab/compare/0.1.6...0.1.7
 [0.1.6]: https://github.com/hmanlab/hmanlab/compare/0.1.5...0.1.6
 [0.1.5]: https://github.com/rekabytes/hmanlab/compare/0.1.4...0.1.5

@@ -1,13 +1,13 @@
 [package]
 name = "hmanlab"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 rust-version = "1.74"
 description = "Terminal UI for chatting with local Ollama and BYOK LLM providers, with agentic tool use and persistent memory."
 license = "MIT"
-repository = "https://github.com/rekabytes/hmanlab"
-homepage = "https://github.com/rekabytes/hmanlab"
-documentation = "https://github.com/rekabytes/hmanlab#readme"
+repository = "https://github.com/hmanlab/hmanlab"
+homepage = "https://github.com/hmanlab/hmanlab"
+documentation = "https://github.com/hmanlab/hmanlab#readme"
 readme = "README.md"
 authors = ["rekabytes <hello@rekabytes.com>"]
 keywords = ["tui", "ollama", "llm", "ratatui", "agent"]
