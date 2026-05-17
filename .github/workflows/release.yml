@@ -136,8 +136,11 @@ jobs:
       contents: write
       id-token: write
     # Skip publish on workflow_dispatch (manual rebuilds) and on forks
-    # that haven't configured NPM_TOKEN — but always run the build matrix.
-    if: github.event_name == 'release' && github.repository_owner == 'rekabytes'
+    # that don't have the npmjs.com Trusted Publisher entry configured —
+    # but always run the build matrix so fork CI is useful.
+    # Repo gate matches the actual upstream; was previously `rekabytes`
+    # before the GitHub transfer to the `hmanlab` org.
+    if: github.event_name == 'release' && github.repository == 'hmanlab/hmanlab'
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
