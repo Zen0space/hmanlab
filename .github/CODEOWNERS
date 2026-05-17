@@ -1,0 +1,10 @@
+# CODEOWNERS for hmanlab.
+#
+# Single global owner: this is a solo-maintained project, and every file
+# is the responsibility of @rekabytes. GitHub will auto-request review
+# from this owner on every pull request.
+#
+# See https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+# for the file syntax. The pattern below matches every path in the repo.
+
+* @rekabytes

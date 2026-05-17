@@ -1,5 +1,17 @@
 # Security policy
 
+## Project status
+
+hmanlab is a **single-maintainer project**, owned and reviewed by [@rekabytes](https://github.com/rekabytes). Every change — code, dependencies, CI, releases — passes through the same person. There is no second human reviewer, and we do not enforce a "requires N approving reviews" branch-protection rule on `main`, because doing so would mean no PR could ever merge.
+
+What this means for you as a user or contributor:
+
+- The maintainer self-reviews every change before merging. There is no separate code reviewer.
+- Security-sensitive PRs (anything touching auth, key handling, the agent confirmation flow, the release pipeline, or supply-chain tooling) get extra scrutiny — diff read twice, test loop run locally, dependency tree compared against the previous release.
+- OpenSSF Scorecard's `Code-Review` and `Maintained` checks will report low scores until either a second maintainer joins (Code-Review) or the repo passes its 90-day anniversary (Maintained). Both are dismissed in the repository's Security tab with reason *"single-maintainer project; no second reviewer available"* and *"time-based metric; resolves automatically"* respectively. Neither indicates an unpatched vulnerability — please read the actual `Vulnerabilities` check for that.
+
+If you'd like to help close the Code-Review gap by becoming a reviewer, open a discussion or reach out to the maintainer.
+
 ## Supported versions
 
 Only the latest minor release receives security fixes. If you're more than one minor behind, please upgrade before filing a report.
@@ -8,7 +20,7 @@ Only the latest minor release receives security fixes. If you're more than one m
 
 If you believe you've found a security issue in hmanlab, please **do not** open a public GitHub issue. Instead, either:
 
-- Open a private advisory: <https://github.com/rekabytes/hmanlab/security/advisories/new>
+- Open a private advisory: <https://github.com/hmanlab/hmanlab/security/advisories/new>
 - Or email <hello@rekabytes.com> with the subject line `hmanlab security`.
 
 Please include:

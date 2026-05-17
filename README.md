@@ -7,9 +7,9 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/hmanlab"><img alt="npm" src="https://img.shields.io/npm/v/hmanlab?label=npm&color=cb3837"></a>
-  <a href="https://github.com/rekabytes/hmanlab/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/rekabytes/hmanlab/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/hmanlab/hmanlab/actions/workflows/ci.yml"><img alt="ci" src="https://github.com/hmanlab/hmanlab/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <a href="https://github.com/rekabytes/hmanlab/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/rekabytes/hmanlab/total?label=downloads&color=green"></a>
+  <a href="https://github.com/hmanlab/hmanlab/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/hmanlab/hmanlab/total?label=downloads&color=green"></a>
   <img alt="status" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
@@ -56,10 +56,10 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 
 | Method | Command | Binary location |
 |---|---|---|
-| **Curl** | `curl -fsSL https://github.com/rekabytes/hmanlab/releases/latest/download/install.sh \| sh` | `~/.local/bin/hmanlab` |
+| **Curl** | `curl -fsSL https://github.com/hmanlab/hmanlab/releases/latest/download/install.sh \| sh` | `~/.local/bin/hmanlab` |
 | **npm (global)** | `npm i -g hmanlab` | `$(npm root -g)/../bin/hmanlab` |
 | **npm (one-off)** | `npx hmanlab` | (no install) |
-| **From source** | `cargo install --git https://github.com/rekabytes/hmanlab` | `~/.cargo/bin/hmanlab` |
+| **From source** | `cargo install --git https://github.com/hmanlab/hmanlab` | `~/.cargo/bin/hmanlab` |
 
 Prebuilt binaries cover `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `win32-x64`. Windows users: use the npm path — the curl installer is POSIX-only.
 
