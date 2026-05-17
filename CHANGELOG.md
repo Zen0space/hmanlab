@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-05-18
+
+### Fixed
+- **npm publish gate broken after the GitHub repository transfer.** The publish job in `release.yml` skipped silently on the `0.1.5` release because its `if:` was hard-coded to `github.repository_owner == 'rekabytes'`, and the repo had moved to the `hmanlab` org. The build matrix kept attaching binaries to the Release, but no `npm publish` ever ran — leaving npm pinned at `0.1.4` after a successful-looking release. Gate is now `github.repository == 'hmanlab/hmanlab'`. Reminder: the npmjs.com Trusted Publisher entry for each of the 6 packages must also point at the new repo for OIDC to mint a publish token.
+
+### Notes
+- Version-only catch-up release for npm. No runtime behaviour change vs. `0.1.5`; everything in the `0.1.5` changelog (the `/update` and `/settings` commands, the Esc-as-interrupt rewire, the README install/update overhaul) is what's actually being published to npm with `0.1.6`.
+
 ## [0.1.5] - 2026-05-17
 
 ### Added
@@ -70,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - First-run wizard for Ollama URL + hmanlab-api key, saved to `~/.config/hmanlab/config.json` (mode 600).
 - npm packaging via the per-arch optional-dependency pattern: umbrella `hmanlab` + `@hmanlab/{linux-x64,linux-arm64,darwin-x64,darwin-arm64,win32-x64}`.
 
+[0.1.6]: https://github.com/hmanlab/hmanlab/compare/0.1.5...0.1.6
 [0.1.5]: https://github.com/rekabytes/hmanlab/compare/0.1.4...0.1.5
 [0.1.4]: https://github.com/rekabytes/hmanlab/compare/0.1.3...0.1.4
 [0.1.3]: https://github.com/rekabytes/hmanlab/compare/0.1.2...0.1.3
