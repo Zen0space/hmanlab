@@ -5,8 +5,9 @@
 
 use crate::config::{
     ExtraModel, OLLAMA_CLOUD_BASE, OLLAMA_CLOUD_MODELS, OLLAMA_CLOUD_PROVIDER, OPENCODE_BASE,
-    OPENCODE_MODELS, OPENCODE_PROVIDER, ZAI_MODELS, ZAI_SUBSCRIPTION_BASE,
-    ZAI_SUBSCRIPTION_PROVIDER, ZAI_USAGE_BASE, ZAI_USAGE_PROVIDER,
+    OPENCODE_MODELS, OPENCODE_PROVIDER, OPENROUTER_BASE, OPENROUTER_MODELS, OPENROUTER_PROVIDER,
+    ZAI_MODELS, ZAI_SUBSCRIPTION_BASE, ZAI_SUBSCRIPTION_PROVIDER, ZAI_USAGE_BASE,
+    ZAI_USAGE_PROVIDER,
 };
 use crate::ollama::Client;
 use crate::openai_compat;
@@ -30,6 +31,7 @@ impl App {
             Some(ZAI_USAGE_PROVIDER) => ZAI_USAGE_BASE,
             Some(OLLAMA_CLOUD_PROVIDER) => OLLAMA_CLOUD_BASE,
             Some(OPENCODE_PROVIDER) => OPENCODE_BASE,
+            Some(OPENROUTER_PROVIDER) => OPENROUTER_BASE,
             _ => &self.client.base,
         }
     }
@@ -71,6 +73,13 @@ impl App {
                     key,
                 )))
             }
+            OPENROUTER_PROVIDER => {
+                let key = self.openrouter_api_key.clone()?;
+                Some(LlmBackend::OpenAi(openai_compat::Client::new(
+                    OPENROUTER_BASE.to_string(),
+                    key,
+                )))
+            }
             _ => None,
         }
     }
@@ -92,6 +101,9 @@ impl App {
         }
         if self.opencode_api_key.is_some() {
             self.ensure_opencode_models();
+        }
+        if self.openrouter_api_key.is_some() {
+            self.ensure_openrouter_models();
         }
         self.persist_config();
     }
@@ -147,6 +159,26 @@ impl App {
         }
     }
 
+    /// Seed the curated OpenRouter model list under the `openrouter` provider.
+    /// Additive (not replace) so users who've hand-added models to their
+    /// config don't lose them when we bump the seed list — OpenRouter has a
+    /// huge catalog and the curated subset is a starting point, not the
+    /// authoritative set.
+    pub(super) fn ensure_openrouter_models(&mut self) {
+        for name in OPENROUTER_MODELS {
+            let exists = self
+                .extra_models
+                .iter()
+                .any(|m| m.provider == OPENROUTER_PROVIDER && m.name == *name);
+            if !exists {
+                self.extra_models.push(ExtraModel {
+                    provider: OPENROUTER_PROVIDER.to_string(),
+                    name: (*name).to_string(),
+                });
+            }
+        }
+    }
+
     /// Rewrite any `provider: "zai"` entries (pre-split config) to
     /// `"zai-subscription"`. Safe to call repeatedly.
     pub(super) fn migrate_legacy_zai_provider(&mut self) {
@@ -165,6 +197,7 @@ impl App {
         cfg.zai_usage_api_key = self.zai_usage_api_key.clone();
         cfg.ollama_cloud_api_key = self.ollama_cloud_api_key.clone();
         cfg.opencode_api_key = self.opencode_api_key.clone();
+        cfg.openrouter_api_key = self.openrouter_api_key.clone();
         cfg.extra_models = self.extra_models.clone();
         let _ = crate::config::save(&cfg);
     }

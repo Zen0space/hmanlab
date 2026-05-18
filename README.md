@@ -95,7 +95,7 @@ From inside the running TUI you can also type `/update` — it detects cargo ins
 
 Launch `hmanlab` without a configured API key and an interactive wizard walks you through:
 
-1. **hmanlab API key** — validates against the backend and saves to `~/.config/hmanlab/config.json` (mode `0600`).
+1. **hmanlab API key** — register a free account at [hmanlab.senireka.my](https://hmanlab.senireka.my) → **API keys**, paste the `bai_…` key when prompted. Validates against the backend and saves to `~/.config/hmanlab/config.json` (mode `0600`). The key only authenticates the TUI to the session-storage backend; it doesn't grant access to any LLM — you still bring your own model (local Ollama or a BYOK provider).
 2. **Provider selection** — optionally add a z.ai subscription key, z.ai usage-based key, or local Ollama URL. Skip everything and configure later from inside the TUI.
 
 After that, every flag is also settable via env var or CLI argument.

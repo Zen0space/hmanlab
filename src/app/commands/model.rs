@@ -46,6 +46,9 @@ impl App {
         if self.opencode_api_key.is_none() {
             entries.push(PickerEntry::AddOpenCode);
         }
+        if self.openrouter_api_key.is_none() {
+            entries.push(PickerEntry::AddOpenRouter);
+        }
         self.picker_entries = entries;
     }
 
@@ -73,7 +76,8 @@ impl App {
                 PickerEntry::AddZaiSubscription
                 | PickerEntry::AddZaiUsage
                 | PickerEntry::AddOllamaCloud
-                | PickerEntry::AddOpenCode => false,
+                | PickerEntry::AddOpenCode
+                | PickerEntry::AddOpenRouter => false,
             })
             .unwrap_or(0);
     }
@@ -96,6 +100,10 @@ impl App {
             p if p == crate::config::OPENCODE_PROVIDER => (
                 "Paste your OpenCode API key (from https://opencode.ai/zen)",
                 "OpenCode",
+            ),
+            p if p == crate::config::OPENROUTER_PROVIDER => (
+                "Paste your OpenRouter API key (from https://openrouter.ai/settings/keys)",
+                "OpenRouter",
             ),
             _ => ("Paste your z.ai coding-plan API key", "z.ai subscription"),
         };
@@ -135,6 +143,11 @@ impl App {
                         self.opencode_api_key = Some(val);
                         self.ensure_opencode_models();
                         ("OpenCode", crate::config::OPENCODE_DEFAULT_MODEL)
+                    }
+                    p if p == crate::config::OPENROUTER_PROVIDER => {
+                        self.openrouter_api_key = Some(val);
+                        self.ensure_openrouter_models();
+                        ("OpenRouter", crate::config::OPENROUTER_DEFAULT_MODEL)
                     }
                     _ => {
                         self.zai_api_key = Some(val);

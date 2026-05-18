@@ -24,6 +24,10 @@ impl App {
         for m in &messages {
             self.messages.push(api_message_to_chat(m));
         }
+        // Fresh session — reset both pagination guards. The previous
+        // session's "no more older" verdict doesn't apply to this one.
+        self.loading_more = false;
+        self.no_more_history = false;
         // The loaded session has its own recorded model, but the
         // user's current selection wins — switching sessions
         // shouldn't silently bounce them off the model they just
@@ -46,11 +50,14 @@ impl App {
         self.follow = true;
         self.scroll = 0;
         let count = messages.len();
-        self.status = format!("Loaded — {count} message(s) (use /more for older)");
+        self.status = format!("Loaded — {count} message(s) — scroll up for older");
         let id_str = session_id.replace('-', "");
         let short = &id_str[..id_str.len().min(8)];
-        let hint = if count == 10 {
-            "\n(Showing 10 most recent — type /more for older messages.)"
+        // 30 matches `commands::session::PAGE_SIZE` — if the load returned
+        // a full page, there's almost certainly older history on the server
+        // and the auto-loader will fetch it when the user scrolls up.
+        let hint = if count >= 30 {
+            "\n(Showing 30 most recent — scroll up to load older messages automatically.)"
         } else {
             ""
         };
@@ -61,7 +68,12 @@ impl App {
     }
 
     pub(super) fn on_more_loaded(&mut self, messages: Vec<Message>) {
+        self.loading_more = false;
         if messages.is_empty() {
+            // Tell the user once, then never auto-fire again for this
+            // session — `no_more_history` short-circuits future
+            // `maybe_auto_load_more` calls.
+            self.no_more_history = true;
             self.push_info("No older messages.".into());
             self.status = "No older messages".into();
             return;
@@ -76,8 +88,13 @@ impl App {
         let mut prepend: Vec<ChatMessage> = messages.iter().map(api_message_to_chat).collect();
         prepend.append(&mut self.messages);
         self.messages = prepend;
+        // Keep the user pinned to the same logical row that was on top
+        // before the prepend, so scroll-triggered auto-loads don't yank
+        // the viewport. Without this, scroll snaps to 0 (effectively
+        // "follow the new top") and a single scroll-up gesture triggers
+        // an immediate cascade of more loads.
         self.follow = false;
-        self.scroll = 0;
+        self.scroll = count as u16;
         self.status = format!("Loaded {count} older message(s)");
     }
 }

@@ -14,6 +14,37 @@ npm install --save-dev hmanlab
 npx hmanlab
 ```
 
+## Quick start
+
+After installing, run:
+
+```bash
+hmanlab
+```
+
+On first launch, hmanlab asks for an API key. **Register a free account at
+[hmanlab.senireka.my](https://hmanlab.senireka.my) → API keys**, paste the
+`bai_…` key when prompted, and you're in. The TUI itself is free.
+
+### Who provides the LLM?
+
+**You do.** hmanlab is a frontend — it doesn't host or proxy any model.
+Plug in either:
+
+- **Your local [Ollama](https://ollama.com)** — runs entirely on your
+  machine, no traffic leaves your network. Default and fully free.
+- **Your own provider key** (BYOK) — z.ai, Ollama Cloud, or OpenCode Go.
+  hmanlab stores the key locally (mode `0600`) and talks to the provider
+  directly; the hmanlab backend never sees it.
+
+### What does the hmanlab API key do?
+
+It authenticates the TUI to the [hmanlab.senireka.my](https://hmanlab.senireka.my)
+backend that stores your chat sessions so you can resume them later
+(`/sessions`, `/load`, `/more`, cross-device history). Without a key the
+TUI still runs against your local Ollama / BYOK provider — you just lose
+saved-session sync.
+
 ## Features
 
 - Streaming replies, agentic tool calls (`read_file`, `edit_file`, `run_command`, git, find), foldable `<think>` blocks

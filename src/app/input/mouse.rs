@@ -11,11 +11,16 @@ use std::io::Write;
 
 use base64::Engine;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use tokio::sync::mpsc;
 
-use super::super::{App, Mode};
+use super::super::{App, Mode, StreamMsg};
 
 impl App {
-    pub(in crate::app) fn handle_mouse(&mut self, m: MouseEvent) {
+    pub(in crate::app) fn handle_mouse(
+        &mut self,
+        m: MouseEvent,
+        tx: &mpsc::UnboundedSender<StreamMsg>,
+    ) {
         // Confirm mode runs its own minimal mouse handler — wheel only,
         // scrolls the diff body the same way the keyboard arrows do.
         // The rest of the chat-mouse logic (selection, sidebar clicks,
@@ -85,6 +90,11 @@ impl App {
                 } else {
                     self.follow = false;
                     self.scroll = self.scroll.saturating_sub(3);
+                    // Wheel scrolled chat upward — if we landed on the very
+                    // top and there's older history on the server, fetch
+                    // the next page automatically. Silent / debounced
+                    // inside `maybe_auto_load_more`.
+                    self.maybe_auto_load_more(tx);
                 }
             }
             MouseEventKind::ScrollDown => {

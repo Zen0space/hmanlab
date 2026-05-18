@@ -31,7 +31,8 @@ pub(in crate::ui) fn render_picker(f: &mut Frame, full: Rect, app: &App) {
                 PickerEntry::AddZaiSubscription
                 | PickerEntry::AddZaiUsage
                 | PickerEntry::AddOllamaCloud
-                | PickerEntry::AddOpenCode => theme::color::USER,
+                | PickerEntry::AddOpenCode
+                | PickerEntry::AddOpenRouter => theme::color::USER,
             };
             let style = if i == app.picker_index {
                 Style::default()

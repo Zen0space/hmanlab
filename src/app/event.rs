@@ -27,7 +27,7 @@ impl App {
     ) -> Result<AppAction> {
         match event {
             Event::Mouse(m) => {
-                self.handle_mouse(m);
+                self.handle_mouse(m, tx);
                 Ok(AppAction::Continue)
             }
             Event::Key(key) => {

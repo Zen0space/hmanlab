@@ -72,6 +72,9 @@ pub enum PickerEntry {
     /// "+ Add OpenCode key" — appears only if the OpenCode Zen / Go key
     /// isn't already configured.
     AddOpenCode,
+    /// "+ Add OpenRouter key" — appears only if the OpenRouter key isn't
+    /// already configured.
+    AddOpenRouter,
 }
 
 impl PickerEntry {
@@ -83,6 +86,7 @@ impl PickerEntry {
             PickerEntry::AddZaiUsage => "+ Add z.ai (usage-based) key".to_string(),
             PickerEntry::AddOllamaCloud => "+ Add Ollama Cloud key".to_string(),
             PickerEntry::AddOpenCode => "+ Add OpenCode Go key".to_string(),
+            PickerEntry::AddOpenRouter => "+ Add OpenRouter key".to_string(),
         }
     }
 }

@@ -153,6 +153,7 @@ async fn main() -> Result<()> {
     app.zai_usage_api_key = saved2.zai_usage_api_key.clone();
     app.ollama_cloud_api_key = saved2.ollama_cloud_api_key.clone();
     app.opencode_api_key = saved2.opencode_api_key.clone();
+    app.openrouter_api_key = saved2.openrouter_api_key.clone();
     app.extra_models = saved2.extra_models.clone();
     // Workspace trust list — paths stored as canonical strings. Recompute
     // whether the current workspace sits in that list so the confirm
@@ -174,6 +175,7 @@ async fn main() -> Result<()> {
         || app.zai_usage_api_key.is_some()
         || app.ollama_cloud_api_key.is_some()
         || app.opencode_api_key.is_some()
+        || app.openrouter_api_key.is_some()
     {
         app.ensure_zai_models_pub();
     }
