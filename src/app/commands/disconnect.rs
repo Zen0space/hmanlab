@@ -44,9 +44,10 @@ impl App {
             "zai-usage" | "usage" | "z.ai-usage" => crate::config::ZAI_USAGE_PROVIDER,
             "ollama-cloud" | "cloud" | "ollama_cloud" => crate::config::OLLAMA_CLOUD_PROVIDER,
             "opencode" | "opencode-go" | "go" | "oc" => crate::config::OPENCODE_PROVIDER,
+            "openrouter" | "or" => crate::config::OPENROUTER_PROVIDER,
             other => {
                 self.push_info(format!(
-                    "Unknown provider '{other}'. Try: zai, zai-usage, ollama-cloud, opencode.\nOr /disconnect (no args) to open the picker."
+                    "Unknown provider '{other}'. Try: zai, zai-usage, ollama-cloud, opencode, openrouter.\nOr /disconnect (no args) to open the picker."
                 ));
                 return;
             }
@@ -66,6 +67,7 @@ impl App {
             p if p == crate::config::ZAI_USAGE_PROVIDER => self.zai_usage_api_key.is_some(),
             p if p == crate::config::OLLAMA_CLOUD_PROVIDER => self.ollama_cloud_api_key.is_some(),
             p if p == crate::config::OPENCODE_PROVIDER => self.opencode_api_key.is_some(),
+            p if p == crate::config::OPENROUTER_PROVIDER => self.openrouter_api_key.is_some(),
             _ => false,
         };
         if !key_present {
@@ -81,6 +83,7 @@ impl App {
             p if p == crate::config::ZAI_USAGE_PROVIDER => self.zai_usage_api_key = None,
             p if p == crate::config::OLLAMA_CLOUD_PROVIDER => self.ollama_cloud_api_key = None,
             p if p == crate::config::OPENCODE_PROVIDER => self.opencode_api_key = None,
+            p if p == crate::config::OPENROUTER_PROVIDER => self.openrouter_api_key = None,
             _ => {}
         }
 
@@ -160,6 +163,13 @@ impl App {
                 provider: crate::config::OPENCODE_PROVIDER.to_string(),
                 label: "OpenCode Go".to_string(),
                 preview: preview(crate::config::OPENCODE_PROVIDER, &self.extra_models),
+            });
+        }
+        if self.openrouter_api_key.is_some() {
+            entries.push(DisconnectEntry {
+                provider: crate::config::OPENROUTER_PROVIDER.to_string(),
+                label: "OpenRouter".to_string(),
+                preview: preview(crate::config::OPENROUTER_PROVIDER, &self.extra_models),
             });
         }
         if entries.is_empty() {

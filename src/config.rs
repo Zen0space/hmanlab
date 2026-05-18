@@ -80,6 +80,31 @@ pub const OLLAMA_CLOUD_BASE: &str = "https://ollama.com";
 pub const OLLAMA_CLOUD_MODELS: &[&str] = &["glm-4.7", "gpt-oss:120b-cloud", "qwen3-coder-next"];
 pub const OLLAMA_CLOUD_DEFAULT_MODEL: &str = "glm-4.7";
 
+/// OpenRouter — meta-provider that routes to many model vendors behind one
+/// OpenAI-compatible endpoint and one billing relationship. Bearer auth
+/// with a key from https://openrouter.ai/settings/keys. Pay-per-token;
+/// some free-tier rows exist with a `:free` suffix.
+///
+/// Slug convention: OpenRouter expects namespaced model IDs of the form
+/// `<vendor>/<model>` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-3.5-sonnet`).
+/// The seeded list is a small curated cross-section of popular paid +
+/// free models known to work via `/chat/completions`. Users with a Pro
+/// or higher plan can edit `~/.config/hmanlab/config.json` to add others
+/// from the [model catalog](https://openrouter.ai/models).
+pub const OPENROUTER_PROVIDER: &str = "openrouter";
+pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
+pub const OPENROUTER_MODELS: &[&str] = &[
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "anthropic/claude-3.5-sonnet",
+    "anthropic/claude-3.5-haiku",
+    "google/gemini-2.0-flash-001",
+    "meta-llama/llama-3.3-70b-instruct",
+    "qwen/qwen-2.5-72b-instruct",
+    "deepseek/deepseek-chat",
+];
+pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+
 /// One user-added model from a BYOK provider. Lives in extra_models so the
 /// `/model` picker can list it alongside Ollama-discovered models.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -116,6 +141,10 @@ pub struct Config {
     /// Same key works for the free tier and the OpenCode Go subscription.
     #[serde(default)]
     pub opencode_api_key: Option<String>,
+    /// OpenRouter API key (Bearer auth against openrouter.ai/api/v1).
+    /// Generated at https://openrouter.ai/settings/keys.
+    #[serde(default)]
+    pub openrouter_api_key: Option<String>,
     #[serde(default)]
     pub extra_models: Vec<ExtraModel>,
     /// Absolute workspace paths the user has explicitly authorised. The
@@ -187,8 +216,12 @@ pub async fn run_setup_wizard(api_url: &str, existing_ollama: Option<&str>) -> R
     println!();
     println!("\x1b[1mWelcome to hmanlab.\x1b[0m");
     println!();
-    println!("Your hmanlab key authenticates the TUI to the backend and powers session storage.");
-    println!("Get one (or sign in) at \x1b[36mhttps://hmanlab.senireka.my\x1b[0m → API keys.");
+    println!("The hmanlab TUI is free. You bring your own LLM — either a local");
+    println!("Ollama install, or a BYOK provider key (z.ai / Ollama Cloud / OpenCode Go).");
+    println!();
+    println!("This key authenticates the TUI to the backend that stores your chat sessions");
+    println!("so you can resume them later. It doesn't grant access to any LLM.");
+    println!("Register a free account (or sign in) at \x1b[36mhttps://hmanlab.senireka.my\x1b[0m → API keys.");
     println!();
 
     let api_key = loop {

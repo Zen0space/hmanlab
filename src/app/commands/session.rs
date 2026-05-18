@@ -11,12 +11,25 @@
 //! `/load` + `/more` are the read side: they hit the persistence API to
 //! pull a saved session back into the visible history. Both fire
 //! background `tokio::spawn` tasks and report back via `StreamMsg`.
+//!
+//! `maybe_auto_load_more` is the scroll-triggered counterpart to `/more`:
+//! when the chat is scrolled to the top of a `/load`'d session and there's
+//! still older history available, it silently pages another `PAGE_SIZE`
+//! batch in without the user having to type `/more`. `loading_more` debounces
+//! repeated triggers during one scroll gesture; `no_more_history` short-
+//! circuits once the server has confirmed there's nothing earlier.
 
 use tokio::sync::mpsc;
 
 use crate::api::ApiOp;
 
 use super::super::{App, StreamMsg};
+
+/// How many messages each `/load` initial fetch and `/more` page brings in.
+/// 30 is a balance: a single fetch usually fills a couple of screens so the
+/// auto-loader doesn't fire constantly, but small enough that the initial
+/// `/load` returns quickly on slow connections.
+pub(in crate::app) const PAGE_SIZE: i64 = 30;
 
 impl App {
     /// `/clear` — drop visible history, keep the underlying DB session.
@@ -32,6 +45,7 @@ impl App {
         self.pending_after_compact = None;
         self.scroll = 0;
         self.follow = true;
+        self.no_more_history = false;
         self.status = "History cleared (current session continues)".into();
     }
 
@@ -50,6 +64,7 @@ impl App {
         self.follow = true;
         self.loaded_session_id = None;
         self.oldest_loaded_msg_id = None;
+        self.no_more_history = false;
         if let Some(tx) = &self.api_tx {
             let _ = tx.send(ApiOp::EndSession);
             self.push_info("New session started. Previous chat saved.".into());
@@ -83,10 +98,10 @@ impl App {
     }
 
     /// `/load <id-prefix>` — find a session by the first few chars of its
-    /// id and pull its 10 most-recent messages into the chat. Two-step
-    /// async because the API needs the resolved id before it can load
-    /// messages — we collapse both into one StreamMsg::Loaded so the UI
-    /// only re-renders once.
+    /// id and pull its `PAGE_SIZE` most-recent messages into the chat.
+    /// Two-step async because the API needs the resolved id before it can
+    /// load messages — we collapse both into one StreamMsg::Loaded so the
+    /// UI only re-renders once.
     pub(in crate::app) fn load_session(
         &mut self,
         prefix: String,
@@ -109,7 +124,7 @@ impl App {
                     return;
                 }
             };
-            match client.load_recent_messages(&session.id, 10).await {
+            match client.load_recent_messages(&session.id, PAGE_SIZE).await {
                 Ok(messages) => {
                     let _ = tx.send(StreamMsg::Loaded { session, messages });
                 }
@@ -120,9 +135,9 @@ impl App {
         });
     }
 
-    /// `/more` — page 10 older messages into a previously-loaded session.
-    /// Only meaningful after `/load`; otherwise nudges the user with
-    /// usage info instead of silently no-op'ing.
+    /// `/more` — page `PAGE_SIZE` older messages into a previously-loaded
+    /// session. Only meaningful after `/load`; otherwise nudges the user
+    /// with usage info instead of silently no-op'ing.
     pub(in crate::app) fn load_more(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
         let Some(client) = self.api.clone() else {
             self.push_info("API is off — nothing to page.".into());
@@ -138,10 +153,16 @@ impl App {
             self.push_info("No more messages to load.".into());
             return;
         };
+        if self.loading_more {
+            // A previous /more or auto-load is already in flight — drop
+            // this one rather than queueing duplicate requests.
+            return;
+        }
+        self.loading_more = true;
         self.status = "Loading older messages…".into();
         let tx = tx.clone();
         tokio::spawn(async move {
-            match client.load_older_messages(&session_id, before_id, 10).await {
+            match client.load_older_messages(&session_id, before_id, PAGE_SIZE).await {
                 Ok(messages) => {
                     let _ = tx.send(StreamMsg::MoreLoaded { messages });
                 }
@@ -150,5 +171,33 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Scroll-triggered counterpart to `/more`. Called from scroll handlers
+    /// whenever the chat is scrolled to the very top. Silent — does nothing
+    /// (and emits no info message) when there's no session loaded, no older
+    /// history, or a load is already in flight. The actual fetch reuses
+    /// `load_more`'s spawn, so the `loading_more` flag and `MoreLoaded`
+    /// stream handler govern both paths.
+    pub(in crate::app) fn maybe_auto_load_more(
+        &mut self,
+        tx: &mpsc::UnboundedSender<StreamMsg>,
+    ) {
+        if self.loading_more {
+            return;
+        }
+        if self.no_more_history {
+            return;
+        }
+        if self.scroll != 0 {
+            return;
+        }
+        if self.loaded_session_id.is_none() {
+            return;
+        }
+        if self.oldest_loaded_msg_id.is_none() {
+            return;
+        }
+        self.load_more(tx);
     }
 }

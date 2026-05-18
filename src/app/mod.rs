@@ -94,6 +94,9 @@ pub struct App {
     pub ollama_cloud_api_key: Option<String>,
     /// OpenCode Zen / Go API key (Bearer to opencode.ai/zen/v1).
     pub opencode_api_key: Option<String>,
+    /// OpenRouter API key (Bearer to openrouter.ai/api/v1). Meta-provider
+    /// for OpenAI / Anthropic / Google / Llama / DeepSeek / Qwen et al.
+    pub openrouter_api_key: Option<String>,
     /// Entries rendered by the picker, built each time `open_picker` runs.
     pub picker_entries: Vec<PickerEntry>,
     pub add_model_step: AddModelStep,
@@ -110,6 +113,16 @@ pub struct App {
     /// Set when `/load` brings in a saved session, so /more knows where to page from.
     pub loaded_session_id: Option<String>,
     pub oldest_loaded_msg_id: Option<i64>,
+    /// True while a `/more` (manual or auto) request is in flight. Debounces
+    /// scroll-triggered auto-loads so a single scroll gesture fires at most
+    /// one request, and prevents `/more` typed during a load from queueing
+    /// a duplicate.
+    pub loading_more: bool,
+    /// Set after a `MoreLoaded` response arrived empty — there's nothing
+    /// older on the server for this session. Stops the auto-loader from
+    /// hammering the API every time the user lands on `scroll == 0`. Reset
+    /// on `/load`, `/new`, `/clear`.
+    pub no_more_history: bool,
     /// Indices of tool messages currently shown expanded. Tool messages collapse
     /// by default to keep the chat readable; Ctrl+T toggles all of them.
     pub expanded_tools: HashSet<usize>,
@@ -278,6 +291,7 @@ impl App {
             zai_usage_api_key: None,
             ollama_cloud_api_key: None,
             opencode_api_key: None,
+            openrouter_api_key: None,
             picker_entries: Vec::new(),
             add_model_step: AddModelStep::Key,
             add_model_provider: crate::config::ZAI_SUBSCRIPTION_PROVIDER.to_string(),
@@ -288,6 +302,8 @@ impl App {
             disconnect_index: 0,
             loaded_session_id: None,
             oldest_loaded_msg_id: None,
+            loading_more: false,
+            no_more_history: false,
             expanded_tools: HashSet::new(),
             expanded_thoughts: HashSet::new(),
             sel_start: None,

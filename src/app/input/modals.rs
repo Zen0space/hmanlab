@@ -129,6 +129,9 @@ impl App {
                         PickerEntry::AddOpenCode => {
                             self.begin_add_model(crate::config::OPENCODE_PROVIDER);
                         }
+                        PickerEntry::AddOpenRouter => {
+                            self.begin_add_model(crate::config::OPENROUTER_PROVIDER);
+                        }
                     }
                 } else {
                     self.mode = Mode::Chat;

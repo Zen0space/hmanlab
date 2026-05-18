@@ -38,6 +38,26 @@ pub(in crate::ui) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) 
                      0600) and only sent to ollama.com — never to hmanlab-api."
                         .to_string(),
                 ),
+                p if p == crate::config::OPENROUTER_PROVIDER => (
+                    " add OpenRouter key ".to_string(),
+                    "Paste your OpenRouter API key (generate one at \
+                     https://openrouter.ai/settings/keys). OpenRouter is a \
+                     meta-provider that routes to OpenAI, Anthropic, Google, \
+                     Meta, DeepSeek, Qwen and many others behind one \
+                     OpenAI-compatible endpoint and one billing relationship.\n\n\
+                     After saving, a curated cross-section of popular models \
+                     becomes selectable in /model: gpt-4o, gpt-4o-mini, \
+                     claude-3.5-sonnet/haiku, gemini-2.0-flash, \
+                     llama-3.3-70b, qwen-2.5-72b, deepseek-chat. Default is \
+                     gpt-4o-mini. Add others by editing \
+                     ~/.config/hmanlab/config.json — see \
+                     https://openrouter.ai/models for the full catalog.\n\n\
+                     Billing is pay-per-token against your OpenRouter \
+                     credit balance. Some rows are free (suffix `:free`).\n\n\
+                     The key is stored in ~/.config/hmanlab/config.json (mode \
+                     0600) and only sent to openrouter.ai — never to hmanlab-api."
+                        .to_string(),
+                ),
                 p if p == crate::config::OPENCODE_PROVIDER => (
                     " add OpenCode Go key ".to_string(),
                     "Paste your OpenCode API key (generate one at \

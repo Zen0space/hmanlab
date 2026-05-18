@@ -43,6 +43,9 @@ impl App {
         if self.opencode_api_key.is_some() {
             byok.push("OpenCode");
         }
+        if self.openrouter_api_key.is_some() {
+            byok.push("OpenRouter");
+        }
         let byok_line = if byok.is_empty() {
             "none".to_string()
         } else {
@@ -124,26 +127,51 @@ impl App {
         });
     }
 
-    /// `/update` — shell out to `npm install -g hmanlab@latest` in the
-    /// background and report the outcome inline. The currently running
-    /// process keeps serving the chat; npm replaces the on-disk binary,
-    /// and the user picks it up on next launch.
+    /// `/update` — upgrade the on-disk binary through whichever channel the
+    /// user installed from. The currently running process keeps serving the
+    /// chat; the upgrade replaces the on-disk binary; the user picks it up
+    /// on next launch.
     ///
-    /// If the binary was installed via cargo (path under `.cargo/bin` or
-    /// a `target/` build dir), we don't even try npm — surface the right
-    /// `cargo install` command instead so the user upgrades through the
-    /// channel they actually used.
+    /// Channel detection is path-based off `std::env::current_exe()`:
+    ///   - cargo (`.cargo/bin/…`, `target/…`) → surface the `cargo install`
+    ///     command instead of running anything ourselves.
+    ///   - curl (binary sits under `.local/bin`, `/usr/local/bin`, or any
+    ///     other path not matching the other two) → surface the install.sh
+    ///     one-liner.
+    ///   - npm (`node_modules` in the path) → actually run
+    ///     `npm install -g hmanlab@latest` for the user.
+    ///
+    /// We only auto-run for npm because that's the only channel where the
+    /// upgrade command is self-contained (no sudo, no curl-from-internet,
+    /// no compiler). The other two we show the command and let the user
+    /// run it themselves.
     pub(in crate::app) fn start_update(&mut self, tx: &mpsc::UnboundedSender<StreamMsg>) {
         let current = env!("CARGO_PKG_VERSION");
 
-        if let Some(hint) = cargo_install_hint() {
-            self.push_info(format!(
-                "hmanlab looks like a cargo install ({hint}).\n\
-                 Run this in another terminal to upgrade:\n\
-                 \x20 cargo install hmanlab --force"
-            ));
-            self.status = "Cargo install detected — see message".into();
-            return;
+        match detect_install_channel() {
+            InstallChannel::Cargo(hint) => {
+                self.push_info(format!(
+                    "hmanlab looks like a cargo install ({hint}).\n\
+                     Run this in another terminal to upgrade:\n\
+                     \x20 cargo install hmanlab --force"
+                ));
+                self.status = "Cargo install detected — see message".into();
+                return;
+            }
+            InstallChannel::Curl(path) => {
+                self.push_info(format!(
+                    "hmanlab looks like a curl install ({path}).\n\
+                     Run this in another terminal to upgrade:\n\
+                     \x20 curl -fsSL https://github.com/hmanlab/hmanlab/releases/latest/download/install.sh | sh\n\
+                     \n\
+                     (Set HMANLAB_INSTALL_DIR if the binary lives somewhere other than ~/.local/bin.)"
+                ));
+                self.status = "Curl install detected — see message".into();
+                return;
+            }
+            InstallChannel::Npm => {
+                // Fall through to the npm branch below.
+            }
         }
 
         self.push_info(format!(
@@ -225,18 +253,47 @@ impl App {
     }
 }
 
-/// If the current binary's path looks like a cargo-managed install,
-/// return a short identifier (the matched path fragment) so `/update`
-/// can suggest the right upgrade channel instead of running npm.
-fn cargo_install_hint() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let s = exe.to_string_lossy().to_string();
+/// Where `/update` thinks the binary came from. Drives which upgrade
+/// command we suggest (or run).
+enum InstallChannel {
+    /// Built / installed via cargo. Carries the path fragment we matched
+    /// on for the user-facing message (`.cargo/bin`, `target/release`,
+    /// `target/debug`).
+    Cargo(&'static str),
+    /// Dropped in place by `install.sh` (curl one-liner). Carries the
+    /// binary's full path string so the user can see exactly where the
+    /// match came from.
+    Curl(String),
+    /// Installed via `npm install -g hmanlab`. The binary lives somewhere
+    /// under a `node_modules` directory.
+    Npm,
+}
+
+/// Guess which install channel the running binary came from, off
+/// `std::env::current_exe()`. Heuristic order:
+///   1. Cargo if the path contains a cargo-specific fragment.
+///   2. Npm if the path contains `node_modules` (npm symlinks resolve to
+///      the platform package binary inside `node_modules/@hmanlab/…`).
+///   3. Curl as the catch-all — `install.sh` drops to `~/.local/bin` by
+///      default, but the user could override `HMANLAB_INSTALL_DIR`. Any
+///      install path that isn't cargo or npm is treated as curl.
+///
+/// If `current_exe()` itself fails (rare), we fall back to Curl with an
+/// empty path — the on-screen message still works because the upgrade
+/// command is self-contained.
+fn detect_install_channel() -> InstallChannel {
+    let path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
     // `.cargo/bin/hmanlab` covers `cargo install`; `target/release` and
     // `target/debug` cover devs running from a local checkout.
     for needle in [".cargo/bin", "target/release", "target/debug"] {
-        if s.contains(needle) {
-            return Some(needle.to_string());
+        if path.contains(needle) {
+            return InstallChannel::Cargo(needle);
         }
     }
-    None
+    if path.contains("node_modules") {
+        return InstallChannel::Npm;
+    }
+    InstallChannel::Curl(path)
 }
