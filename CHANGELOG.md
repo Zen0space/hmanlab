@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.11] - 2026-05-19
+
+### Added
+- **OpenRouter model list stays current automatically.** After you paste your OpenRouter key, hmanlab fetches the live model catalog from openrouter.ai and refreshes the picker with everything available today — Claude Opus 4.7, Sonnet 4.6, Haiku 4.5; GPT-5.5 / 5.5 Pro / 5.4 Mini; Gemini 3.1 Flash Lite, Gemini 2.5 Pro; DeepSeek v4, Qwen 3.6, Grok 4.3, Kimi K2.6, and more. The refresh also runs on startup if your key is already configured, so new models show up the next time you launch.
+- **Curated to popular vendors.** OpenRouter exposes 400+ models; the picker filters down to a usable set from Anthropic, OpenAI, Google, DeepSeek, Qwen, Meta, Mistral, xAI, Moonshot, and z.ai — and drops preview / image / TTS / embedding rows so you only see chat-capable models.
+
+### Changed
+- **Default OpenRouter model is now Claude Sonnet 4.6** (was GPT-4o Mini), reflecting the current best balance of capability and price for coding work.
+
+[0.1.11]: https://github.com/hmanlab/hmanlab/compare/0.1.10...0.1.11
+
 ## [0.1.10] - 2026-05-19
 
 ### Added
