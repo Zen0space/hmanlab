@@ -21,6 +21,7 @@ mod memory;
 mod ollama;
 mod openai_compat;
 mod tools;
+mod trust;
 mod ui;
 mod update_check;
 
@@ -72,7 +73,7 @@ async fn main() -> Result<()> {
     };
 
     // Re-load config so ollama_host reflects anything the wizard just wrote.
-    let saved2 = config::load().ok().flatten().unwrap_or_default();
+    let mut saved2 = config::load().ok().flatten().unwrap_or_default();
     // Has the user explicitly told us about Ollama — either via --host flag or
     // a saved config entry from onboarding? If neither, they skipped the
     // wizard's local-LLM step; don't auto-probe localhost behind their back.
@@ -89,6 +90,33 @@ async fn main() -> Result<()> {
         None => std::env::current_dir()?,
     };
     let workspace = workspace.canonicalize().unwrap_or(workspace);
+
+    // Pre-TUI trust prompt. Fires only when this workspace isn't already
+    // on the persisted trusted list, so repeat launches in the same folder
+    // don't re-ask. We mutate `saved2` and re-save so the new entry sticks.
+    let workspace_str = workspace.display().to_string();
+    let already_trusted = saved2
+        .trusted_workspaces
+        .iter()
+        .any(|p| p == &workspace_str);
+    if !already_trusted {
+        match trust::prompt_workspace_trust(&workspace) {
+            Ok(true) => {
+                saved2.trusted_workspaces.push(workspace_str.clone());
+                // Best-effort persist — if save fails, the trust still
+                // applies for this session via the in-memory list below.
+                if let Err(e) = config::save(&saved2) {
+                    eprintln!("warn: failed to persist trust decision: {e}");
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // Don't block startup on a prompt error — just leave
+                // the workspace untrusted and continue into the TUI.
+                eprintln!("warn: trust prompt failed: {e}");
+            }
+        }
+    }
 
     let models = if user_supplied_host.is_some() {
         client.list_models().await.unwrap_or_default()
@@ -126,6 +154,19 @@ async fn main() -> Result<()> {
     app.ollama_cloud_api_key = saved2.ollama_cloud_api_key.clone();
     app.opencode_api_key = saved2.opencode_api_key.clone();
     app.extra_models = saved2.extra_models.clone();
+    // Workspace trust list — paths stored as canonical strings. Recompute
+    // whether the current workspace sits in that list so the confirm
+    // interceptor in `app::stream` can short-circuit destructive tools.
+    app.trusted_workspaces = saved2
+        .trusted_workspaces
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    app.workspace_trusted = app.trusted_workspaces.iter().any(|p| p == &app.workspace);
+    // Re-seed now that we know the trust state — the first call above
+    // ran with the default `workspace_trusted = false`, so trusted
+    // workspaces wouldn't have shown their dotfile dirs at root.
+    app.seed_sidebar_top_level();
     // Migrate older configs: a saved BYOK key means the matching provider's
     // models should be available, even if the user previously added only one.
     // Also rewrites legacy provider="zai" → "zai-subscription".
@@ -137,12 +178,40 @@ async fn main() -> Result<()> {
         app.ensure_zai_models_pub();
     }
 
-    // Initial model: --model flag > first Ollama model > first extra > none.
+    // Initial model resolution order:
+    //   1. --model flag (explicit user intent on this launch)
+    //   2. last-used model from config (persistence across restarts)
+    //   3. first Ollama-discovered model
+    //   4. first BYOK extra
     // We pick AFTER loading extras so a z.ai-only user lands on glm-4.7
     // instead of a doomed "llama3.2" → Ollama route.
+    let last_model = saved2.last_model.as_deref();
+    let last_provider = saved2.last_provider.as_deref();
+    let last_extra = last_model.and_then(|name| {
+        let want_provider = last_provider; // None → Ollama; Some → BYOK
+        match want_provider {
+            Some(prov) => app
+                .extra_models
+                .iter()
+                .find(|m| m.name == name && m.provider == prov)
+                .cloned(),
+            None => None,
+        }
+    });
+    let last_ollama = last_model.filter(|name| {
+        // Saved model points at Ollama (no provider) AND the host still
+        // serves it. If it was renamed/removed we fall through.
+        last_provider.is_none() && app.models.iter().any(|m| m == name)
+    });
     if let Some(name) = cli.model.clone() {
         app.model = name.clone();
         app.selected_extra = app.extra_models.iter().find(|m| m.name == name).cloned();
+    } else if let Some(em) = last_extra {
+        app.model = em.name.clone();
+        app.selected_extra = Some(em);
+    } else if let Some(name) = last_ollama {
+        app.model = name.to_string();
+        app.selected_extra = None;
     } else if let Some(name) = app.models.first().cloned() {
         app.model = name;
         app.selected_extra = None;

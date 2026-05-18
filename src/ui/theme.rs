@@ -39,6 +39,16 @@ pub mod color {
     pub const BORDER_ACTIVE: Color = ACCENT; // peach
     pub const BORDER_IDLE: Color = Color::Rgb(69, 71, 90); // surface1
 
+    // Card surface — used to group consecutive read-only tool messages into
+    // a single borderless tile (see `ui::chat::render_chat`). One step up
+    // from the chat panel's transparent canvas so the card reads as a
+    // distinct, slightly-elevated block without needing a frame.
+    pub const BG_CARD: Color = Color::Rgb(49, 50, 68); // catppuccin surface0
+    /// Hovered card row — one elevation brighter than `BG_CARD` so the
+    /// pointer's current target reads clearly as "clickable" without a
+    /// chevron or arrow icon.
+    pub const BG_CARD_HOVER: Color = Color::Rgb(88, 91, 112); // catppuccin surface2
+
     // Status / diff
     pub const SUCCESS: Color = USER;
     pub const ERROR: Color = TOOL_ERROR;
@@ -101,14 +111,16 @@ pub fn popup_block(title: &str, danger: bool) -> Block<'_> {
 }
 
 /// Role label + color used at the head of each chat message.
-/// Returns ("❯ You", USER), ("◆ AI", ASSISTANT), etc.
+/// The leading `▎` is a colored vertical bar that continues down the
+/// message body too (see `chat::render_chat`), giving each turn an
+/// OpenCode-style "card with a colored gutter" look.
 pub fn role_label(role: &str) -> (&'static str, Color) {
     match role {
-        "user" => ("❯ You", color::USER),
-        "assistant" => ("◆ AI", color::ASSISTANT),
-        "info" => ("• system", color::SYSTEM),
-        "summary" => ("⌘ compacted summary", color::SYSTEM),
-        "tool" => ("● tool", color::TOOL),
+        "user" => ("▎ user", color::USER),
+        "assistant" => ("▎ assistant", color::ASSISTANT),
+        "info" => ("▎ system", color::SYSTEM),
+        "summary" => ("▎ compacted", color::SYSTEM),
+        "tool" => ("▎ tool", color::TOOL),
         _ => ("?", color::FG_DIM),
     }
 }

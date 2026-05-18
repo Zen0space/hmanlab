@@ -62,7 +62,11 @@ struct Entry {
 /// itself, plus its immediate (visible) child directories. Makes the first
 /// launch show one level of contents at a glance while leaving deeper
 /// directories collapsed.
-pub(crate) fn initial_expanded(workspace: &Path) -> HashSet<PathBuf> {
+///
+/// `show_hidden` controls whether dotfile directories are pre-expanded.
+/// Trusted workspaces pass `true` so `.hmanlab`, `.cargo/`, etc. open with
+/// their contents visible; untrusted ones keep dotfiles hidden entirely.
+pub(crate) fn initial_expanded(workspace: &Path, show_hidden: bool) -> HashSet<PathBuf> {
     let mut out = HashSet::new();
     // The root is always implicitly expanded — keep it in the set so the
     // walk function can use a single membership check at every level.
@@ -72,7 +76,7 @@ pub(crate) fn initial_expanded(workspace: &Path) -> HashSet<PathBuf> {
     };
     for e in read.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        if name.starts_with('.') && !show_hidden {
             continue;
         }
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -100,7 +104,13 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
     app.sidebar_targets.clear();
 
     let mut entries: Vec<Entry> = Vec::new();
-    walk(&app.workspace, 0, &app.expanded_dirs, &mut entries);
+    walk(
+        &app.workspace,
+        0,
+        &app.expanded_dirs,
+        app.workspace_trusted,
+        &mut entries,
+    );
 
     let mut lines: Vec<Line> = Vec::with_capacity(entries.len() + 1);
 
@@ -179,7 +189,13 @@ pub(super) fn render_sidebar(f: &mut Frame, area: Rect, app: &mut App) {
     f.render_widget(para, area);
 }
 
-fn walk(dir: &Path, depth: u8, expanded: &HashSet<PathBuf>, out: &mut Vec<Entry>) {
+fn walk(
+    dir: &Path,
+    depth: u8,
+    expanded: &HashSet<PathBuf>,
+    show_hidden: bool,
+    out: &mut Vec<Entry>,
+) {
     // Only descend into directories the user has expanded. The workspace
     // root is pre-seeded into `expanded` (see `initial_expanded`), so the
     // first call always enters at least one level.
@@ -192,12 +208,15 @@ fn walk(dir: &Path, depth: u8, expanded: &HashSet<PathBuf>, out: &mut Vec<Entry>
     let mut items: Vec<(String, bool)> = Vec::new();
     for e in read.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        // Conventional file-tree behaviour: hide dotfiles. Cuts noise from
-        // .git ignore artefacts, lockfile companions, editor configs, etc.
-        if name.starts_with('.') {
+        // Hide dotfiles UNLESS the workspace is trusted — `.env`,
+        // `.hmanlab`, `.editorconfig` etc. become visible only after the
+        // user has explicitly authorised this folder.
+        if name.starts_with('.') && !show_hidden {
             continue;
         }
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        // SKIP_DIRS still apply at every depth — `.git`, `target`,
+        // `node_modules` are noise even in a trusted workspace.
         if is_dir && SKIP_DIRS.iter().any(|s| *s == name) {
             continue;
         }
@@ -225,7 +244,7 @@ fn walk(dir: &Path, depth: u8, expanded: &HashSet<PathBuf>, out: &mut Vec<Entry>
             path: full.clone(),
         });
         if is_dir {
-            walk(&full, depth + 1, expanded, out);
+            walk(&full, depth + 1, expanded, show_hidden, out);
         }
     }
 }

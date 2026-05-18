@@ -75,9 +75,29 @@ fn resolve_tool_alias(name: &str) -> &str {
         "Glob" => "find_files",
         "Bash" | "Shell" => "run_command",
         "Edit" => "edit_file",
+        "MultiEdit" => "multi_edit",
         "Write" => "write_file",
         other => other,
     }
+}
+
+/// True if `name` (model-emitted alias OK) is a tool that only reads
+/// state — never mutates the filesystem, never runs a shell command,
+/// never writes memory. Used by the chat renderer to consolidate runs
+/// of consecutive read-only tool calls into a single "reading N files"
+/// card so file-heavy turns don't pile up as N standalone rows.
+pub fn is_readonly_tool(name: &str) -> bool {
+    matches!(
+        resolve_tool_alias(name),
+        "read_file"
+            | "list_dir"
+            | "find_files"
+            | "git_status"
+            | "git_log"
+            | "git_diff"
+            | "git_show"
+            | "read_memory"
+    )
 }
 
 pub async fn execute_tool(name: &str, args: &Value, ctx: &ToolContext) -> Result<String> {
@@ -115,9 +135,17 @@ pub async fn execute_tool(name: &str, args: &Value, ctx: &ToolContext) -> Result
             }) {
                 bail!("rev contains disallowed characters");
             }
-            git::run_git(ctx, &["show", "--stat", rev]).await
+            // Drop `--stat`: the previous `--stat`-only output gave file
+            // counts but no actual hunks, so "read the latest commit"
+            // needed a second `git_diff HEAD~1..HEAD` call. Now one call
+            // returns the full picture — message, author, date, AND the
+            // line-level diff. Big commits still get tail-truncated by
+            // `truncate_utf8`, in which case the model can fall back to
+            // `git_diff` with a `path:` filter to drill into one file.
+            git::run_git(ctx, &["show", rev]).await
         }
         "edit_file" => write::tool_edit_file(args, ctx).await,
+        "multi_edit" => write::tool_multi_edit(args, ctx).await,
         "write_file" => write::tool_write_file(args, ctx).await,
         "run_command" => shell::tool_run_command(args, ctx).await,
         "save_memory" => memory_tools::tool_save_memory(args, ctx).await,

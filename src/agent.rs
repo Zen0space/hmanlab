@@ -16,8 +16,14 @@ use crate::tools;
 
 /// Hard cap on agent-loop iterations. If a model keeps calling tools without
 /// ever emitting a final reply, we kill the run rather than burning tokens
-/// forever — this is a panic-button, not a normal exit condition.
-const MAX_TURNS: usize = 10;
+/// forever — this is a panic-button for stuck-in-loop models, NOT a normal
+/// exit condition and NOT related to chat history paging.
+///
+/// 50 is comfortable headroom for real coding tasks (15–30 tool calls is
+/// routine for multi-file edits). Hitting it almost always means the model
+/// is actually stuck — interrupt with Ctrl+C and rephrase, or extend if a
+/// specific task legitimately needs more iterations.
+const MAX_TURNS: usize = 50;
 
 pub async fn agent_loop(
     backend: LlmBackend,
@@ -111,6 +117,7 @@ pub async fn agent_loop(
             tool_calls: Some(tool_calls.clone()),
             name: None,
             hidden: false,
+            diff: None,
         });
 
         for tc in &tool_calls {
@@ -132,6 +139,7 @@ pub async fn agent_loop(
                 name: Some(tc.function.name.clone()),
                 tool_calls: None,
                 hidden: false,
+                diff: None,
             });
         }
 
@@ -139,6 +147,8 @@ pub async fn agent_loop(
     }
 
     let _ = tx.send(StreamMsg::Error(format!(
-        "agent exceeded {MAX_TURNS} turns without producing a final answer"
+        "agent stopped after {MAX_TURNS} tool-call rounds without a final text reply — \
+         the model is likely stuck in a loop. Ask it to summarise what it has so far, \
+         or rephrase the request."
     )));
 }

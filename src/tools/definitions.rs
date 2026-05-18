@@ -94,12 +94,14 @@ pub fn tool_definitions() -> Vec<Tool> {
         ),
         Tool::function(
             "git_show",
-            "Show a commit (with --stat) by hash or ref. Use when the user names a \
-             specific commit.",
+            "Show a commit's full message + line-level diff by hash or ref. Use for \
+             'what did commit X change' or 'read the latest commit' (pass rev: \"HEAD\"). \
+             For very large commits the output is tail-truncated — fall back to git_diff \
+             with a `path:` filter if you need to drill into one file.",
             json!({
                 "type": "object",
                 "properties": {
-                    "rev": {"type": "string", "description": "Commit hash or ref (e.g. HEAD, abc1234)"}
+                    "rev": {"type": "string", "description": "Commit hash or ref (e.g. HEAD, HEAD~1, abc1234)"}
                 },
                 "required": ["rev"]
             }),
@@ -119,6 +121,35 @@ pub fn tool_definitions() -> Vec<Tool> {
                     "new_string": {"type": "string", "description": "Replacement text"}
                 },
                 "required": ["path", "old_string", "new_string"]
+            }),
+        ),
+        Tool::function(
+            "multi_edit",
+            "Apply MULTIPLE surgical edits to the same file in one call. Takes an `edits` \
+             array of {old_string, new_string} pairs applied in order — each old_string must \
+             appear EXACTLY once in the current file state (after prior edits in this batch). \
+             All-or-nothing: if any edit fails validation, nothing is written and the error \
+             names the failing edit index. Prefer this over multiple edit_file calls when \
+             changing several places in the same file — one approval, one cumulative diff, \
+             one tool call. User must approve before it writes.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "path":  {"type": "string", "description": "Path (relative to workspace)"},
+                    "edits": {
+                        "type": "array",
+                        "description": "Sequence of edits to apply. Order matters — each old_string is matched against the state AFTER prior edits.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string", "description": "Exact text to find (must be unique in the current state)"},
+                                "new_string": {"type": "string", "description": "Replacement text"}
+                            },
+                            "required": ["old_string", "new_string"]
+                        }
+                    }
+                },
+                "required": ["path", "edits"]
             }),
         ),
         Tool::function(
@@ -258,6 +289,10 @@ pub fn system_prompt(workspace: &Path) -> String {
          long enough to be unique. Read the file first if you're unsure of the exact text \
          (whitespace counts). edit_file fails fast if `old_string` is missing or matches more \
          than once — that's working as intended; expand the snippet and retry.\n\n\
+         When you have MULTIPLE changes to make to the SAME file, batch them in a single \
+         multi_edit call instead of firing N separate edit_file calls. The user sees one \
+         approval popup with the cumulative diff instead of N popups, and your context \
+         stays cleaner. Order matters: later edits see the result of earlier ones.\n\n\
          Use write_file ONLY for new files or wholesale rewrites — it clobbers everything \
          else in the file. Don't reach for write_file to make a one-line change.\n\n\
          ## CRITICAL: do not disclaim capabilities\n\

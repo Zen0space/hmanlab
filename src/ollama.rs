@@ -18,6 +18,13 @@ pub struct ChatMessage {
     /// but never render in the chat UI. Never sent over the wire.
     #[serde(skip)]
     pub hidden: bool,
+    /// Snapshot of the coloured diff the user authorised for this tool call
+    /// (write_file / edit_file / save_memory). Populated when `pending_tool_diff`
+    /// is taken in `ToolResult`; consumed by the chat renderer to redraw the
+    /// diff inline when the user clicks the tool row to expand it. Never sent
+    /// over the wire — only relevant locally to the UI.
+    #[serde(skip)]
+    pub diff: Option<Vec<crate::tools::DiffLine>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

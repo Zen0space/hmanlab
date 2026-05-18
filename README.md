@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>The agentic terminal client for any LLM you have a key for.</b><br>
-  Local Ollama. Cloud Ollama. z.ai. OpenCode Go. One TUI.
+  Local Ollama · Cloud Ollama · z.ai · OpenCode Go · One TUI
 </p>
 
 <p align="center">
@@ -34,10 +34,13 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 - **Inline markdown** — `**bold**` and `` `code` `` render styled in the chat panel.
 - **Thinking block folding** — `<think>…</think>` reasoning blocks collapse by default; click or `Ctrl+T` to expand.
 - **Y/N quick-reply** — when the model asks a yes/no question, just press `Y` or `N`.
+- **Inline autocomplete** — type `/` for slash-command autocomplete, `@` for file/folder mention autocomplete. ↑↓ to navigate, Tab/Enter to insert, Esc to dismiss.
 
 ### Tools & memory
 
-- **Agentic tool calls** — the model reads files, explores directories, runs git commands, edits/writes files, executes shell commands, and recalls persistent memories. Every destructive action requires your confirmation in a popup with a diff preview.
+- **Agentic tool calls** — the model reads files, explores directories, runs git commands, edits/writes files, executes shell commands, and recalls persistent memories. Every destructive action requires your confirmation in a scrollable popup with a diff preview.
+- **Workspace trust** — on first launch in a new directory, hmanlab asks whether to trust the workspace. Untrusted workspaces allow read-only tools but block destructive ones. Use `/trust` or `/untrust` to change later. Dotfiles like `.env` are only visible when trusted.
+- **Model persistence** — your last chosen model is remembered across restarts. Loading a saved session won't override it.
 - **Persistent memory** — save and recall durable facts about you, your project, or how to behave, across sessions. Two scopes: user-wide and project-local.
 - **Auto-compaction** — when the context window fills up, old turns are summarised into a single message so the conversation keeps going without losing the thread.
 
@@ -46,7 +49,8 @@ Built in [Rust](https://www.rust-lang.org) with [ratatui](https://ratatui.rs). S
 - **Session persistence** — chats save to the hmanlab-api backend over HTTPS so future clients (mobile, web) can share your history. Falls back to local-only when the API is unreachable.
 - **Session browsing** — `/sessions` to list, `/load <id>` to resume, `/more` to page through older messages.
 - **Sidebar + file viewer** — browse your workspace tree and open files inline without leaving the TUI.
-- **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse.
+- **Mouse support** — drag to select text (copies via OSC 52), wheel to scroll, click on tool blocks to expand/collapse or re-view an approved diff.
+- **Catppuccin Mocha theme** — coherent palette across header, sidebar, chat, popups, and viewer. Centralised in `src/ui/theme.rs` so every renderer pulls from one place.
 - **First-run wizard** — guided setup for API key and provider selection on first launch; skip-everything-and-configure-later is fine.
 - **Token tracking** — running prompt + completion token count shown in the header.
 
@@ -140,6 +144,8 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `/models`, `/ls` | List available models |
 | `/host <url>` | Change Ollama host |
 | `/workspace <path>` | Change agent workspace |
+| `/trust` | Authorise this workspace for file edits & shell |
+| `/untrust` | Remove this workspace from the trusted list |
 | `/compact` | Manually compact conversation history |
 | `/disconnect` | Remove a BYOK provider and its models |
 | `/settings`, `/whoami` | Show your account, version, and configured providers |
@@ -155,7 +161,7 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | Key | Action |
 |---|---|
 | `Enter` | Send message |
-| `Shift+Enter` | Newline in input |
+| `Alt+Enter` / `Ctrl+J` | Newline in input (most terminals collapse `Shift+Enter` to plain Enter) |
 | `Ctrl+N` | New session |
 | `Ctrl+M` | Open model picker |
 | `Ctrl+T` | Fold/unfold all tool blocks and thinking blocks |
@@ -163,6 +169,10 @@ HMANLAB_API_KEY=bai_yourkeyhere hmanlab \
 | `Ctrl+Q` | Quit |
 | `Ctrl+L` | Clear chat history |
 | `Esc` | Interrupt generation, clear draft input, or close viewer/popup |
+| `/` at start of input | Slash-command autocomplete |
+| `@` after whitespace | File/folder mention autocomplete |
+| `↑` / `↓` | Navigate autocomplete popup |
+| `Tab` / `Enter` in popup | Insert selected completion |
 | `Mouse wheel` | Scroll chat |
 | `Drag` | Select text; release copies to clipboard (OSC 52) |
 | `Click` on tool block | Toggle fold |
@@ -193,6 +203,7 @@ When using a tool-capable model (`qwen2.5`, `qwen3`, `glm-4.7`, etc.), the AI ca
 | `git_diff` | Line-level diffs |
 | `git_show` | Show a specific commit |
 | `edit_file` | Surgical string replacement (user confirms) |
+| `multi_edit` | Batch multiple edits to the same file (one confirm) |
 | `write_file` | Create or overwrite a file (user confirms) |
 | `run_command` | Shell command in workspace (user confirms, 30 s timeout) |
 | `save_memory` | Save durable facts to persistent memory store (user confirms) |

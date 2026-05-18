@@ -118,6 +118,24 @@ pub struct Config {
     pub opencode_api_key: Option<String>,
     #[serde(default)]
     pub extra_models: Vec<ExtraModel>,
+    /// Absolute workspace paths the user has explicitly authorised. The
+    /// agent's destructive tools (write_file, edit_file, run_command,
+    /// save_memory, forget_memory) refuse to run outside this list — gated
+    /// at the `StreamMsg::ConfirmRequest` interceptor in `app::stream`.
+    /// Modeled after Claude Code's per-folder trust prompt.
+    #[serde(default)]
+    pub trusted_workspaces: Vec<String>,
+    /// Last model the user selected (via /model or the picker). Reused on
+    /// the next launch so a user who switched to glm-5.1 doesn't get bounced
+    /// back to the alphabetically-first Ollama model. Pair with
+    /// `last_provider` to disambiguate: the same model name can exist on
+    /// multiple BYOK providers (e.g. glm-4.7 on both z.ai plans).
+    #[serde(default)]
+    pub last_model: Option<String>,
+    /// Provider tag for `last_model` — `None` means Ollama, otherwise it
+    /// matches one of the `ExtraModel::provider` strings.
+    #[serde(default)]
+    pub last_provider: Option<String>,
 }
 
 pub fn path() -> Result<PathBuf> {

@@ -1,0 +1,47 @@
+//! `render_session_picker` — overlay listing recent saved sessions
+//! (their short id, model, and title). Triggered by `/sessions`.
+
+use ratatui::{
+    layout::Rect,
+    style::{Modifier, Style},
+    widgets::{Clear, List, ListItem, Padding},
+    Frame,
+};
+
+use crate::app::App;
+
+use super::super::theme;
+use super::centered_rect;
+
+pub(in crate::ui) fn render_session_picker(f: &mut Frame, full: Rect, app: &App) {
+    let area = centered_rect(80, 70, full);
+    f.render_widget(Clear, area);
+    let items: Vec<ListItem> = app
+        .session_picker_items
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let id_str = s.id.replace('-', "");
+            let short = &id_str[..id_str.len().min(8)];
+            let model = s.model.as_deref().unwrap_or("?");
+            let title: String = s.title.chars().take(70).collect();
+            let label = format!(" {short}  [{model}]  {title} ");
+            let style = if i == app.session_picker_index {
+                Style::default()
+                    .fg(ratatui::style::Color::Black)
+                    .bg(theme::color::ACCENT_ALT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::color::FG)
+            };
+            ListItem::new(label).style(style)
+        })
+        .collect();
+    let title = format!(
+        "sessions ({}) — ↑↓ Enter Esc",
+        app.session_picker_items.len()
+    );
+    let list =
+        List::new(items).block(theme::popup_block(&title, false).padding(Padding::horizontal(1)));
+    f.render_widget(list, area);
+}
