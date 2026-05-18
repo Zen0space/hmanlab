@@ -59,6 +59,9 @@ impl App {
             StreamMsg::SessionList(rows) => self.on_session_list(rows),
             StreamMsg::Loaded { session, messages } => self.on_loaded(session, messages),
             StreamMsg::MoreLoaded { messages } => self.on_more_loaded(messages),
+            StreamMsg::OpenRouterModelsRefreshed(models) => {
+                self.on_openrouter_models_refreshed(models)
+            }
         }
     }
 

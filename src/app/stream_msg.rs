@@ -72,4 +72,8 @@ pub enum StreamMsg {
     NewAssistantTurn,
     /// The agent wants the user to confirm a risky action.
     ConfirmRequest(tools::ConfirmRequest),
+    /// Live OpenRouter model catalog landed — replaces the static seed.
+    /// Already filtered to the popular-vendors set; the stream handler
+    /// just swaps them into `extra_models` and persists.
+    OpenRouterModelsRefreshed(Vec<String>),
 }

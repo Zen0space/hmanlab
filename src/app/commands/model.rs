@@ -17,9 +17,10 @@
 //! immediately — no need to re-open the picker.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tokio::sync::mpsc;
 use tui_textarea::Input;
 
-use super::super::{fresh_textarea, AddModelStep, App, AppAction, Mode, PickerEntry};
+use super::super::{fresh_textarea, AddModelStep, App, AppAction, Mode, PickerEntry, StreamMsg};
 
 impl App {
     pub(in crate::app) fn rebuild_picker_entries(&mut self) {
@@ -112,7 +113,11 @@ impl App {
         self.status = format!("Adding {label} key — Esc to cancel");
     }
 
-    pub(in crate::app) fn handle_add_model(&mut self, key: KeyEvent) -> AppAction {
+    pub(in crate::app) fn handle_add_model(
+        &mut self,
+        key: KeyEvent,
+        tx: &mpsc::UnboundedSender<StreamMsg>,
+    ) -> AppAction {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Chat;
@@ -166,6 +171,13 @@ impl App {
                 self.selected_extra = target_extra;
                 self.mode = Mode::Chat;
                 self.status = format!("{label} key saved · using {}", self.model);
+                // For OpenRouter, immediately try to pull the live model
+                // catalog — the static seed in OPENROUTER_MODELS is just a
+                // first-launch fallback. Silent failure is fine (network
+                // blip, no_proxy, etc.); the user keeps the seeded set.
+                if provider == crate::config::OPENROUTER_PROVIDER {
+                    self.refresh_openrouter_models(tx);
+                }
                 return AppAction::Continue;
             }
             _ => {}
