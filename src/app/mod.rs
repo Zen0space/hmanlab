@@ -1,6 +1,10 @@
-//! `App` — owns all UI state. The actual event-handling and stream-handling
-//! logic lives in submodules; this file is just the type definition plus
-//! constructor and the small helpers shared across the whole tree.
+//! `App` — the central UI state struct. Field is per-feature, not per-tab;
+//! everything the renderer needs and every handler mutates lands here.
+//!
+//! The actual *behavior* (event handling, stream processing, slash
+//! commands, workspace/trust state, etc.) lives in submodules; this
+//! file is just the struct + constructor + module wiring + a couple of
+//! tiny shared helpers (`fresh_textarea`, `seed_sidebar_top_level`).
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -8,18 +12,30 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
-use crate::api::{self, ApiOp, Message, Session};
+use crate::api::{self, ApiOp};
 use crate::config::ExtraModel;
-use crate::ollama::{ChatMessage, Client, ToolCall};
+use crate::ollama::{ChatMessage, Client};
 use crate::tools;
 
 mod backend;
+mod commands;
 pub mod event;
+mod heuristics;
 pub mod inline;
+mod input;
+mod state;
 mod stream;
+mod stream_msg;
+mod viewer;
+pub mod workspace;
 
 pub use backend::LlmBackend;
 pub use inline::{InlinePopup, SLASH_COMMANDS};
+pub use state::{AddModelStep, AppAction, DisconnectEntry, Mode, PickerEntry};
+pub use stream_msg::StreamMsg;
+pub use viewer::OpenFile;
+
+use crate::api::Session;
 
 /// Build a TextArea with no current-line underline (tui-textarea's default
 /// behavior is to underline the cursor row, which looks like a stray line in
@@ -30,208 +46,14 @@ pub(super) fn fresh_textarea() -> TextArea<'static> {
     ta
 }
 
-/// A file the user opened from the sidebar for inline reading.
-pub struct OpenFile {
-    /// Path shown in the viewer title (relative to workspace when possible).
-    pub display: String,
-    /// Either the file's text, or an empty string when `error` is set.
-    pub content: String,
-    /// Populated when the file couldn't be loaded (too large, binary, etc.).
-    pub error: Option<String>,
-    /// Scroll offset in lines (0 = top).
-    pub scroll: u16,
-}
-
-/// Hard cap on file size loaded into the viewer — protects against opening
-/// a 50 MB log by accident and dumping it through ratatui's text engine.
-const VIEWER_MAX_BYTES: u64 = 256 * 1024;
-
 impl App {
     /// Reset the sidebar state to defaults for the current workspace: clear
     /// any user expansion + reset scroll, then re-seed the expanded set with
     /// the workspace root and its immediate visible directories. Called once
     /// at startup (from `main`) and again whenever `/workspace` switches.
     pub fn seed_sidebar_top_level(&mut self) {
-        self.expanded_dirs =
-            crate::ui::initial_expanded(&self.workspace, self.workspace_trusted);
+        self.expanded_dirs = crate::ui::initial_expanded(&self.workspace, self.workspace_trusted);
         self.sidebar_scroll = 0;
-    }
-
-    /// Read a workspace file into the viewer. Sets `self.open_file` to either
-    /// the loaded content or an error description; never panics, never bails.
-    /// Caller is expected to pass an absolute path from `sidebar_targets`.
-    pub fn open_workspace_file(&mut self, path: PathBuf) {
-        let display = path
-            .strip_prefix(&self.workspace)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| path.display().to_string());
-        let (content, error) = match std::fs::metadata(&path) {
-            Ok(m) if m.len() > VIEWER_MAX_BYTES => (
-                String::new(),
-                Some(format!(
-                    "file is {} bytes; viewer cap is {} bytes",
-                    m.len(),
-                    VIEWER_MAX_BYTES
-                )),
-            ),
-            Ok(_) => match std::fs::read_to_string(&path) {
-                Ok(s) => (s, None),
-                // Binary or wrong encoding — surface a tidy message rather
-                // than dumping raw bytes through the renderer.
-                Err(e) => (String::new(), Some(format!("cannot read as text: {e}"))),
-            },
-            Err(e) => (String::new(), Some(format!("stat failed: {e}"))),
-        };
-        let _ = path; // kept around above only to surface `display` errors.
-        self.open_file = Some(OpenFile {
-            display,
-            content,
-            error,
-            scroll: 0,
-        });
-    }
-}
-
-#[derive(PartialEq)]
-pub enum AppAction {
-    Continue,
-    Quit,
-}
-
-pub enum StreamMsg {
-    Chunk(String),
-    Done {
-        prompt_tokens: u32,
-        completion_tokens: u32,
-    },
-    Error(String),
-    Models {
-        models: Vec<String>,
-        base: String,
-    },
-    SessionList(Vec<Session>),
-    Loaded {
-        session: Session,
-        messages: Vec<Message>,
-    },
-    MoreLoaded {
-        messages: Vec<Message>,
-    },
-    /// Assistant turn just ended and produced tool calls (the assistant message
-    /// content has already been streamed via `Chunk`).
-    AssistantTurnEnded {
-        tool_calls: Vec<ToolCall>,
-    },
-    /// Compaction (manual `/compact` or auto-triggered) finished — the
-    /// model returned a summary that should replace the visible history.
-    CompactionDone {
-        summary: String,
-        prompt_tokens: u32,
-        completion_tokens: u32,
-    },
-    /// Compaction failed — surface the error and leave the existing
-    /// history untouched.
-    CompactionError(String),
-    /// Background update check found a newer hmanlab on npm. Renders
-    /// as a one-line notice in the header — never blocks anything.
-    UpdateAvailable(String),
-    /// `/update` finished. `ok` is the exit status; `text` is the
-    /// message to surface inline (success summary or failure cause).
-    UpdateResult {
-        ok: bool,
-        text: String,
-    },
-    /// `/update` interim progress line (e.g., "0.1.4 → 0.1.5, installing…").
-    /// Pushed to the chat as an info message so the user can see what
-    /// the background task is doing without blocking.
-    UpdateInfo(String),
-    /// `/settings` finished gathering account + version info. The text
-    /// is a pre-formatted multi-line block ready to render verbatim.
-    Settings(String),
-    /// Begin executing a tool.
-    ToolStart {
-        name: String,
-        args: serde_json::Value,
-    },
-    /// Tool finished — its output replaces the placeholder content on the
-    /// trailing `tool` message.
-    ToolResult {
-        output: String,
-    },
-    /// Start a fresh assistant placeholder for the next agent turn.
-    NewAssistantTurn,
-    /// The agent wants the user to confirm a risky action.
-    ConfirmRequest(tools::ConfirmRequest),
-}
-
-#[derive(Clone, PartialEq)]
-pub enum Mode {
-    Chat,
-    ModelPicker,
-    Confirm,
-    /// Asking for a BYOK API key (e.g. z.ai). Use `add_step` to track which
-    /// step of the add-model flow we're on.
-    AddModel,
-    /// Listing saved chat sessions; Up/Down navigate, Enter loads the
-    /// highlighted session.
-    SessionPicker,
-    /// Listing currently-connected BYOK providers for removal; Up/Down
-    /// navigate, Enter disconnects the highlighted provider, Esc cancels.
-    DisconnectPicker,
-}
-
-/// AddModel is a single-step flow now (key entry only). The model list per
-/// provider is hardcoded — see `config::ZAI_MODELS`.
-#[derive(Clone, Copy, PartialEq)]
-pub enum AddModelStep {
-    Key,
-}
-
-/// One row in the `/disconnect` picker — a currently-connected BYOK
-/// provider plus a short preview of the models that will be removed
-/// alongside its API key.
-#[derive(Clone)]
-pub struct DisconnectEntry {
-    /// Provider identifier (e.g. `"zai-subscription"`).
-    pub provider: String,
-    /// Pretty label shown in the popup (e.g. `"z.ai subscription"`).
-    pub label: String,
-    /// Three-or-fewer model names + a "+N more" suffix when the provider
-    /// seeds a longer catalog. Lets the user see what they're about to
-    /// drop before pressing Enter.
-    pub preview: String,
-}
-
-/// What the `/model` picker can display. The picker mixes Ollama-discovered
-/// models with BYOK extras and trailing "Add …" action rows (one per
-/// unconfigured provider).
-#[derive(Clone)]
-pub enum PickerEntry {
-    Ollama(String),
-    Extra(ExtraModel),
-    /// "+ Add z.ai (subscription) key" — appears only if the subscription
-    /// key isn't already configured.
-    AddZaiSubscription,
-    /// "+ Add z.ai (usage-based) key" — appears only if the usage key isn't
-    /// already configured.
-    AddZaiUsage,
-    /// "+ Add Ollama Cloud key" — appears only if the cloud key isn't set.
-    AddOllamaCloud,
-    /// "+ Add OpenCode key" — appears only if the OpenCode Zen / Go key
-    /// isn't already configured.
-    AddOpenCode,
-}
-
-impl PickerEntry {
-    pub fn display(&self) -> String {
-        match self {
-            PickerEntry::Ollama(name) => name.clone(),
-            PickerEntry::Extra(m) => format!("[{}] {}", m.provider, m.name),
-            PickerEntry::AddZaiSubscription => "+ Add z.ai (subscription) key".to_string(),
-            PickerEntry::AddZaiUsage => "+ Add z.ai (usage-based) key".to_string(),
-            PickerEntry::AddOllamaCloud => "+ Add Ollama Cloud key".to_string(),
-            PickerEntry::AddOpenCode => "+ Add OpenCode Go key".to_string(),
-        }
     }
 }
 
@@ -390,11 +212,6 @@ pub struct App {
     /// Reset to 0 on each new ConfirmRequest; ↑↓/PgUp/PgDn move it in
     /// `handle_confirm`; clamped to a valid max by the renderer.
     pub confirm_scroll: u16,
-    /// Diff that came in with the last *approved* ConfirmRequest. Picked
-    /// up by the next `ToolResult` and attached to the matching tool
-    /// message so clicking it later re-displays the diff inline. Cleared
-    /// once attached, or on deny / new turn.
-    pub pending_tool_diff: Option<Vec<tools::DiffLine>>,
     /// Last mouse cursor position observed from `MouseEventKind::Moved`
     /// events. Used by the chat renderer to highlight the hovered "reading
     /// N files" card row so users see it's clickable without needing a
@@ -406,6 +223,11 @@ pub struct App {
     /// by `ui::chat` each frame; consumed by the same renderer after the
     /// paragraph is laid out to paint the hover overlay.
     pub card_row_targets: Vec<(u16, usize)>,
+    /// Inner content width of the input box (cols), populated each frame
+    /// by `chat::render_input`. The input event handler reads this to
+    /// know when a typed character would push the current line past the
+    /// visible edge and a soft-wrap should kick in.
+    pub input_inner_w: u16,
 }
 
 impl App {
@@ -419,7 +241,7 @@ impl App {
     ) -> Self {
         let mut input = fresh_textarea();
         input.set_placeholder_text(
-            "Type a message, or /help for commands.  (Enter=send, Shift+Enter=newline)",
+            "Type a message, or /help for commands.  (Enter=send, Alt+Enter / Ctrl+J=newline)",
         );
         let db_state = if api.is_some() { "API on" } else { "API off" };
         let status = if models.is_empty() {
@@ -502,10 +324,10 @@ impl App {
             trusted_workspaces: Vec::new(),
             workspace_trusted: false,
             confirm_scroll: 0,
-            pending_tool_diff: None,
             hover_x: 0,
             hover_y: 0,
             card_row_targets: Vec::new(),
+            input_inner_w: 0,
         }
     }
 }

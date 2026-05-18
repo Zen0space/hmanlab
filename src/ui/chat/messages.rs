@@ -1,4 +1,15 @@
-//! The main chat surface (message history + input box).
+//! `render_chat` — assembles every visible row in the chat panel.
+//!
+//! Walks `app.messages` once, emitting both styled `Line`s (for ratatui)
+//! and a parallel plain-text snapshot (for copy-on-drag). Branches on
+//! message role + state:
+//!   - Read-card grouping (consecutive collapsed read-only tools).
+//!   - Standalone tool tiles (write/edit/multi_edit/etc., or expanded reads).
+//!   - Thinking-fold for assistant `<think>…</think>` blocks.
+//!   - Plain assistant / user / info / summary text.
+//!
+//! After paragraph render, two buffer-overlay passes paint the hover
+//! highlight on the row under the cursor and the drag-select rectangle.
 
 use ratatui::{
     layout::{Position, Rect},
@@ -10,212 +21,14 @@ use ratatui::{
 
 use crate::app::App;
 
-use super::markdown::{parse_inline_md, wrap_styled_segments};
-use super::theme;
+use super::super::markdown::{parse_inline_md, wrap_styled_segments};
+use super::super::theme;
+use super::helpers::{
+    args_for_tool_msg, card_line, compute_read_groups, diff_line_counts, split_thinking,
+    thinking_breath, tool_breath, tool_summary,
+};
 
-/// Period of one full breath, in animation ticks. The ticker fires every
-/// 120 ms (see `main::run`), so 30 ticks ≈ 3.6 s — slow enough to read as
-/// breathing rather than blinking.
-const BREATH_PERIOD: u64 = 30;
-
-/// Sine-interpolate between two RGB colors using `tick` as phase. Returns
-/// `lo` at the trough and `hi` at the peak of each breath cycle.
-fn breath_color(tick: u64, lo: (u8, u8, u8), hi: (u8, u8, u8)) -> Color {
-    let phase = (tick % BREATH_PERIOD) as f32 / BREATH_PERIOD as f32 * std::f32::consts::TAU;
-    let t = (phase.sin() * 0.5) + 0.5;
-    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
-    Color::Rgb(lerp(lo.0, hi.0), lerp(lo.1, hi.1), lerp(lo.2, hi.2))
-}
-
-/// Sky-tinted breath used for the "thinking" indicator. Pulses between a
-/// muted version of the sky-blue role color and the full sky color.
-fn thinking_breath(tick: u64) -> Color {
-    breath_color(tick, (55, 90, 105), (137, 220, 235))
-}
-
-/// Peach-tinted breath used for the active tool row — peach is the
-/// theme's primary accent, so an in-flight tool reads as the focal point.
-fn tool_breath(tick: u64) -> Color {
-    breath_color(tick, (115, 80, 60), (250, 179, 135))
-}
-
-/// Boil a tool call down to a `verb · primary-arg` summary the user can scan
-/// at a glance. Tool-specific so the most-informative argument bubbles up:
-/// `read_file({"path":"src/main.rs"})` → `read · src/main.rs`,
-/// `run_command({"command":"cargo build"})` → `$ cargo build`. Unknown
-/// tools fall back to `name(json)` so nothing is lost. Accepts the model's
-/// TitleCase aliases (`Read`, `Bash`, …) the same way `tools::resolve_tool_alias` does.
-fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> String {
-    let get_str = |key: &str| -> Option<String> {
-        args.and_then(|v| v.get(key))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-    };
-    match name {
-        "read_file" | "Read" => format!("read · {}", get_str("path").unwrap_or_else(|| "?".into())),
-        "list_dir" | "LS" | "List" => {
-            format!("ls · {}", get_str("path").unwrap_or_else(|| ".".into()))
-        }
-        "find_files" | "Glob" => {
-            format!(
-                "find · {}",
-                get_str("pattern").unwrap_or_else(|| "?".into())
-            )
-        }
-        "git_status" => "git status".into(),
-        "git_log" => {
-            let n = args
-                .and_then(|v| v.get("limit"))
-                .and_then(|v| v.as_i64())
-                .map(|n| format!(" -n {n}"))
-                .unwrap_or_default();
-            format!("git log{n}")
-        }
-        "git_diff" => match get_str("path") {
-            Some(p) if !p.is_empty() => format!("git diff · {p}"),
-            _ => "git diff".into(),
-        },
-        "git_show" => format!(
-            "git show · {}",
-            get_str("rev").unwrap_or_else(|| "?".into())
-        ),
-        "edit_file" | "Edit" => format!("edit · {}", get_str("path").unwrap_or_else(|| "?".into())),
-        "multi_edit" | "MultiEdit" => {
-            let path = get_str("path").unwrap_or_else(|| "?".into());
-            let count = args
-                .and_then(|v| v.get("edits"))
-                .and_then(|v| v.as_array())
-                .map(|a| a.len())
-                .unwrap_or(0);
-            if count > 0 {
-                format!("multi-edit · {path} ({count} edits)")
-            } else {
-                format!("multi-edit · {path}")
-            }
-        }
-        "write_file" | "Write" => {
-            format!("write · {}", get_str("path").unwrap_or_else(|| "?".into()))
-        }
-        "run_command" | "Bash" | "Shell" => {
-            format!("$ {}", get_str("command").unwrap_or_else(|| "?".into()))
-        }
-        other => {
-            let json = args
-                .and_then(|v| serde_json::to_string(v).ok())
-                .unwrap_or_else(|| "{}".into());
-            format!("{other}({json})")
-        }
-    }
-}
-
-/// Membership info for the "reading N files" consolidation card. Set on
-/// every message that's part of a run of consecutive collapsed read-only
-/// tool calls (see `compute_read_groups`); `None` for everything else.
-#[derive(Clone, Copy)]
-struct ReadGroup {
-    /// Index of the first visible message in the run — anchor for the
-    /// `reading N files` header.
-    first: usize,
-    /// Index of the last visible message in the run — used to know when
-    /// to emit the trailing spacer.
-    last: usize,
-    /// Total number of visible messages in the run. Drives the header
-    /// count and decides whether to consolidate at all (requires ≥ 2).
-    count: usize,
-}
-
-/// Compute consolidation groups: runs of ≥ 2 consecutive **collapsed**
-/// read-only tool messages, skipping any hidden messages between them.
-/// Returns a vec parallel to `messages` — `Some(g)` means msg is part of
-/// the consolidation card, `None` means it renders standalone.
-fn compute_read_groups(
-    messages: &[crate::ollama::ChatMessage],
-    expanded: &std::collections::HashSet<usize>,
-) -> Vec<Option<ReadGroup>> {
-    let mut out = vec![None; messages.len()];
-    let visible: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter(|(_, m)| !m.hidden)
-        .map(|(i, _)| i)
-        .collect();
-
-    let groupable = |i: usize| -> bool {
-        let m = &messages[i];
-        m.role == "tool"
-            && crate::tools::is_readonly_tool(m.name.as_deref().unwrap_or(""))
-            && !expanded.contains(&i)
-    };
-
-    let mut run: Vec<usize> = Vec::new();
-    let flush = |run: &mut Vec<usize>, out: &mut Vec<Option<ReadGroup>>| {
-        if run.len() >= 2 {
-            let info = ReadGroup {
-                first: run[0],
-                last: *run.last().unwrap(),
-                count: run.len(),
-            };
-            for &k in run.iter() {
-                out[k] = Some(info);
-            }
-        }
-        run.clear();
-    };
-    for &idx in &visible {
-        if groupable(idx) {
-            run.push(idx);
-        } else {
-            flush(&mut run, &mut out);
-        }
-    }
-    flush(&mut run, &mut out);
-    out
-}
-
-/// Build one full-width line for a "reading N files" card. The bg color
-/// fills from column 0 all the way to `width`, so consecutive card lines
-/// stack into a single visual block without a border.
-fn card_line(prefix: &str, text: &str, fg: Color, bg: Color, width: usize) -> Line<'static> {
-    let used = prefix.chars().count() + text.chars().count();
-    let pad = width.saturating_sub(used);
-    let pad_str = if pad > 0 { " ".repeat(pad) } else { String::new() };
-    Line::from(vec![
-        Span::styled(prefix.to_string(), Style::default().bg(bg)),
-        Span::styled(text.to_string(), Style::default().fg(fg).bg(bg)),
-        Span::styled(pad_str, Style::default().bg(bg)),
-    ])
-}
-
-/// Find the arguments the model passed to the tool call that produced
-/// `messages[i]`. The chat-completion convention pairs each `tool` message
-/// positionally with one entry of the preceding assistant's `tool_calls`,
-/// so we walk back to the nearest assistant message and index by how many
-/// tool messages sit between it and `i`.
-fn args_for_tool_msg(
-    messages: &[crate::ollama::ChatMessage],
-    i: usize,
-) -> Option<&serde_json::Value> {
-    if messages.get(i)?.role != "tool" {
-        return None;
-    }
-    let mut prior_tools: usize = 0;
-    let mut asst_idx: Option<usize> = None;
-    for j in (0..i).rev() {
-        match messages[j].role.as_str() {
-            "tool" => prior_tools += 1,
-            "assistant" => {
-                asst_idx = Some(j);
-                break;
-            }
-            // user / info — no preceding assistant tool_calls relate to this tool
-            _ => return None,
-        }
-    }
-    let tcs = messages[asst_idx?].tool_calls.as_ref()?;
-    tcs.get(prior_tools).map(|tc| &tc.function.arguments)
-}
-
-pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
+pub(in crate::ui) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     // Chat is the always-focused surface — wear the active border colour.
     let block = theme::panel_block("chat", true).padding(Padding::horizontal(1));
     let inner = block.inner(area);
@@ -312,6 +125,172 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         // the agent loop in agent.rs wraps tool failures as "error: {e}".
         let tool_errored =
             is_tool && !is_active_tool && msg.content.trim_start().starts_with("error:");
+
+        // Standalone card-styled tool render. Triggered for any tool that
+        // didn't get folded into a consolidated read group above. Same
+        // BG_CARD fill, same dim-grey body — so expanding a tool feels
+        // like the card just grew downward instead of jumping into a
+        // different visual style. Keeps "agent tool" vs "agent reply"
+        // immediately distinguishable: tools always look like tinted
+        // tiles, assistant text always looks like plain prose with a
+        // gutter bar.
+        if is_tool {
+            // Header label — same glyph + summary + suffix logic as the
+            // legacy tool header below, but rendered as a full-width card
+            // row instead of bare text.
+            let summary = tool_summary(
+                msg.name.as_deref().unwrap_or("tool"),
+                args_for_tool_msg(&app.messages, i),
+            );
+            // Suffix prefers `+aL -rL` add/remove counts when the tool
+            // carries an attached diff (write_file / edit_file /
+            // multi_edit / save_memory). Falls back to total-content-line
+            // count for tools without a diff (read_file, list_dir,
+            // git_*, etc.) — there's no meaningful add/remove for them.
+            let suffix = if is_active_tool {
+                "  · running…".to_string()
+            } else if tool_errored {
+                "  · failed".to_string()
+            } else if tool_expanded {
+                String::new()
+            } else if let Some(diff) = msg.diff.as_ref() {
+                let (added, removed) = diff_line_counts(diff);
+                format!("  (+{added}L -{removed}L)")
+            } else {
+                let body_lines = msg.content.lines().count().max(1);
+                format!("  ({body_lines}L)")
+            };
+            // No chevron in either collapsed or expanded state — matches
+            // the grouped read-card design and your "no chevron" rule.
+            // The card-tile bg + hover highlight carries clickability;
+            // visible body rows make the expanded state obvious. `◌` is
+            // kept only for the actively-running tool because the breath
+            // colour alone can be subtle and the spinner is informative
+            // (not a click affordance).
+            let label = if is_active_tool {
+                format!("◌ {summary}{suffix}")
+            } else {
+                format!("{summary}{suffix}")
+            };
+            // Match the grouped read-card row colour — dim grey instead of
+            // sky-blue. Reserves the saturated palette for genuine state
+            // signals (red for failed, peach breath for actively running)
+            // so a wall of routine reads doesn't outshine assistant prose.
+            let header_fg = if is_active_tool {
+                tool_breath(app.anim_tick)
+            } else if tool_errored {
+                theme::color::TOOL_ERROR
+            } else {
+                theme::color::FG_DIM
+            };
+
+            // Header row — bold tool color over card bg, indent 2 to align
+            // with `▎ assistant` body text under the role label.
+            let header_prefix = "  ";
+            text_lines.push(format!("{header_prefix}{label}"));
+            let header_used = header_prefix.chars().count() + label.chars().count();
+            let header_pad = card_width.saturating_sub(header_used);
+            lines.push(Line::from(vec![
+                Span::styled(header_prefix.to_string(), Style::default().bg(card_bg)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(header_fg)
+                        .bg(card_bg)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ".repeat(header_pad), Style::default().bg(card_bg)),
+            ]));
+            // Header is the click target — hover highlight follows it.
+            let header_logical_row = (lines.len() as u16).saturating_sub(1);
+            app.card_row_targets.push((header_logical_row, i));
+
+            if tool_expanded {
+                let body_prefix = "    ";
+                let body_indent_w = body_prefix.chars().count();
+                let body_content_w = card_width.saturating_sub(body_indent_w).max(10);
+
+                // Helper: emit one body row as a full-width card line so
+                // the bg stays solid edge-to-edge regardless of text length.
+                let push_body_row = |lines: &mut Vec<Line>,
+                                     text_lines: &mut Vec<String>,
+                                     text: String,
+                                     fg: Color| {
+                    text_lines.push(format!("{body_prefix}{text}"));
+                    let used = body_indent_w + text.chars().count();
+                    let pad = card_width.saturating_sub(used);
+                    lines.push(Line::from(vec![
+                        Span::styled(body_prefix.to_string(), Style::default().bg(card_bg)),
+                        Span::styled(text, Style::default().fg(fg).bg(card_bg)),
+                        Span::styled(" ".repeat(pad), Style::default().bg(card_bg)),
+                    ]));
+                };
+
+                if let Some(diff) = msg.diff.as_ref() {
+                    // Diff body — keep semantic palette (green/red/dim/yellow)
+                    // for readability, but every row sits on the card bg so
+                    // the expanded block reads as a single tile.
+                    for dl in diff {
+                        let fg = match dl.kind {
+                            crate::tools::DiffLineKind::Added => theme::color::SUCCESS,
+                            crate::tools::DiffLineKind::Removed => theme::color::ERROR,
+                            crate::tools::DiffLineKind::Context => theme::color::FG_DIM,
+                            crate::tools::DiffLineKind::Summary => theme::color::WARNING,
+                        };
+                        for spans in wrap_styled_segments(
+                            vec![(dl.text.clone(), Style::default().fg(fg))],
+                            body_content_w,
+                        ) {
+                            let combined: String =
+                                spans.iter().map(|s| s.content.as_ref()).collect();
+                            push_body_row(&mut lines, &mut text_lines, combined, fg);
+                        }
+                    }
+                } else {
+                    // Plain text body — dim grey on card bg. No markdown
+                    // parsing (tool output is typically raw JSON/text/log).
+                    let trimmed = msg.content.trim_end_matches(['\n', '\r']);
+                    let body_fg = if tool_errored {
+                        theme::color::TOOL_ERROR
+                    } else {
+                        theme::color::FG_DIM
+                    };
+                    for paragraph in trimmed.split('\n') {
+                        if paragraph.is_empty() {
+                            // Empty card row keeps the bg continuous — without
+                            // this, blank lines in the tool output would punch
+                            // a hole through the tile.
+                            text_lines.push(String::new());
+                            lines.push(Line::from(Span::styled(
+                                " ".repeat(card_width),
+                                Style::default().bg(card_bg),
+                            )));
+                            continue;
+                        }
+                        for spans in wrap_styled_segments(
+                            vec![(paragraph.to_string(), Style::default().fg(body_fg))],
+                            body_content_w,
+                        ) {
+                            let combined: String =
+                                spans.iter().map(|s| s.content.as_ref()).collect();
+                            push_body_row(&mut lines, &mut text_lines, combined, body_fg);
+                        }
+                    }
+                }
+            }
+
+            // Click hit-test covers the whole tool tile (header + any body).
+            let line_end_excl = lines.len() as u16;
+            ranges.push((i, line_start, line_end_excl));
+
+            // Spacer between messages so consecutive tool tiles don't
+            // visually fuse into one giant card.
+            if i != last_idx {
+                text_lines.push(String::new());
+                lines.push(Line::from(""));
+            }
+            continue;
+        }
 
         // Header line. For tool messages we collapse what used to be three
         // separate signals (`● ⏵ tool · name`, the `→ name(json)` echo on the
@@ -466,10 +445,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                             .fg(theme::color::WARNING)
                             .add_modifier(Modifier::BOLD),
                     };
-                    for spans in wrap_styled_segments(
-                        vec![(dl.text.clone(), style)],
-                        content_width,
-                    ) {
+                    for spans in wrap_styled_segments(vec![(dl.text.clone(), style)], content_width)
+                    {
                         let mut plain = String::with_capacity(content_width);
                         plain.push_str(indent);
                         for span in &spans {
@@ -502,9 +479,7 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         Span::styled(gutter_glyph.to_string(), Style::default().fg(breath)),
                         Span::styled(
                             "● thinking",
-                            Style::default()
-                                .fg(breath)
-                                .add_modifier(Modifier::BOLD),
+                            Style::default().fg(breath).add_modifier(Modifier::BOLD),
                         ),
                     ]));
                 }
@@ -536,8 +511,7 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         text_lines.push(plain);
                         let mut line_spans: Vec<Span<'static>> =
                             Vec::with_capacity(spans.len() + 1);
-                        line_spans
-                            .push(Span::styled(gutter_glyph.to_string(), gutter_style));
+                        line_spans.push(Span::styled(gutter_glyph.to_string(), gutter_style));
                         line_spans.extend(spans);
                         lines.push(Line::from(line_spans));
                     }
@@ -648,89 +622,5 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                 }
             }
         }
-    }
-}
-
-pub(super) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
-    let first_line = app.input.lines().first().cloned().unwrap_or_default();
-    let is_cmd = first_line.trim_start().starts_with('/');
-
-    // Title encodes input mode; border colour echoes it so the box state
-    // is scannable from across the screen.
-    let (title, border_color) = if app.generating {
-        (
-            "▎ generating · Ctrl+C to cancel".to_string(),
-            theme::color::WARNING,
-        )
-    } else if is_cmd {
-        (
-            "▎ command · Enter to run".to_string(),
-            theme::color::ACCENT_ALT,
-        )
-    } else if app.yn_pending {
-        (
-            "▎ [Y] yes  ·  [N] no  ·  type to override".to_string(),
-            theme::color::ASSISTANT,
-        )
-    } else {
-        ("▎ message".to_string(), theme::color::ACCENT)
-    };
-
-    let block = ratatui::widgets::Block::default()
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_type(ratatui::widgets::BorderType::Rounded)
-        .border_style(Style::default().fg(border_color))
-        .title(Span::styled(
-            format!(" {title} "),
-            Style::default()
-                .fg(border_color)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .padding(Padding::horizontal(1));
-    app.input.set_block(block);
-    f.render_widget(&app.input, area);
-}
-
-/// Split an assistant message into its `<think>` reasoning block and the
-/// visible answer. Qwen3's chat template *prepends* `<think>\n` to the
-/// assistant prefix, so streamed output starts directly with reasoning text
-/// and emits `</think>` once the model is ready to answer.
-///
-/// Returns `(thinking, visible)` where:
-///   - `thinking` is `Some(text)` if the model produced any reasoning content,
-///     `None` if the message has no thinking (or thinking is empty).
-///   - `visible` is the post-`</think>` answer.
-///
-/// While still streaming and `</think>` hasn't arrived yet, everything so far
-/// is reasoning — we report `visible = ""` so the existing "generating dots"
-/// branch renders progress without leaking raw thoughts. Once generation
-/// finishes without ever emitting `</think>`, we fall back to treating the
-/// whole content as visible (legacy / non-reasoning models).
-fn split_thinking(s: &str, generating: bool) -> (Option<&str>, &str) {
-    const CLOSE: &str = "</think>";
-    const OPEN: &str = "<think>";
-    if let Some(idx) = s.find(CLOSE) {
-        let raw_think = &s[..idx];
-        // Strip a leading "<think>" if present (some templates include it in
-        // the streamed content rather than the prompt) plus surrounding
-        // whitespace.
-        let trimmed_think = raw_think
-            .trim_start_matches(OPEN)
-            .trim_matches(|c: char| c == '\n' || c == '\r' || c == ' ');
-        let after = &s[idx + CLOSE.len()..];
-        let visible = after.trim_start_matches(['\n', '\r']);
-        if trimmed_think.is_empty() {
-            (None, visible)
-        } else {
-            (Some(trimmed_think), visible)
-        }
-    } else if generating {
-        // Mid-stream: thinking in progress, no answer yet. Hide content;
-        // the generating-spinner branch will show a "…" placeholder.
-        (None, "")
-    } else {
-        // Finished without a closing </think>: legacy / non-thinking model.
-        // Render content as-is.
-        (None, s)
     }
 }
