@@ -86,24 +86,53 @@ pub const OLLAMA_CLOUD_DEFAULT_MODEL: &str = "glm-4.7";
 /// some free-tier rows exist with a `:free` suffix.
 ///
 /// Slug convention: OpenRouter expects namespaced model IDs of the form
-/// `<vendor>/<model>` (e.g. `openai/gpt-4o-mini`, `anthropic/claude-3.5-sonnet`).
-/// The seeded list is a small curated cross-section of popular paid +
-/// free models known to work via `/chat/completions`. Users with a Pro
-/// or higher plan can edit `~/.config/hmanlab/config.json` to add others
-/// from the [model catalog](https://openrouter.ai/models).
+/// `<vendor>/<model>` (e.g. `anthropic/claude-opus-4.7`, `openai/gpt-5.5`).
+///
+/// `OPENROUTER_MODELS` is the static fallback seed — written once when the
+/// user pastes their API key, used immediately so the picker has something
+/// to show. After that, `refresh_openrouter_models` fetches the live
+/// `/api/v1/models` catalog in the background and replaces these entries
+/// with whatever's actually current. So the seed only matters for offline
+/// first-launch and as a safety net if openrouter.ai is unreachable.
 pub const OPENROUTER_PROVIDER: &str = "openrouter";
 pub const OPENROUTER_BASE: &str = "https://openrouter.ai/api/v1";
 pub const OPENROUTER_MODELS: &[&str] = &[
-    "openai/gpt-4o",
-    "openai/gpt-4o-mini",
-    "anthropic/claude-3.5-sonnet",
-    "anthropic/claude-3.5-haiku",
-    "google/gemini-2.0-flash-001",
+    // Anthropic Claude (current generation).
+    "anthropic/claude-opus-4.7",
+    "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-haiku-4.5",
+    // OpenAI GPT-5 family.
+    "openai/gpt-5.5",
+    "openai/gpt-5.5-pro",
+    "openai/gpt-5.4-mini",
+    // Google Gemini.
+    "google/gemini-3.1-flash-lite",
+    "google/gemini-2.5-pro",
+    // Other notable hosts.
+    "deepseek/deepseek-v4-pro",
+    "qwen/qwen3.6-plus",
+    "x-ai/grok-4.3",
+    "moonshotai/kimi-k2.6",
     "meta-llama/llama-3.3-70b-instruct",
-    "qwen/qwen-2.5-72b-instruct",
-    "deepseek/deepseek-chat",
 ];
-pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-4o-mini";
+pub const OPENROUTER_DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.6";
+
+/// Vendors whose IDs we keep when filtering the live OpenRouter catalog
+/// down to a usable picker size. Everything else is dropped on the
+/// theory that 400-row pickers are worse than missing a niche provider —
+/// users can still add models manually by editing config.json.
+pub const OPENROUTER_VENDORS: &[&str] = &[
+    "anthropic",
+    "openai",
+    "google",
+    "deepseek",
+    "qwen",
+    "meta-llama",
+    "mistralai",
+    "x-ai",
+    "moonshotai",
+    "z-ai",
+];
 
 /// One user-added model from a BYOK provider. Lives in extra_models so the
 /// `/model` picker can list it alongside Ollama-discovered models.

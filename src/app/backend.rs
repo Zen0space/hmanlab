@@ -3,16 +3,18 @@
 //! the provider field decides which URL + key combo to use; when it's
 //! `None`, we're on Ollama.
 
+use tokio::sync::mpsc;
+
 use crate::config::{
     ExtraModel, OLLAMA_CLOUD_BASE, OLLAMA_CLOUD_MODELS, OLLAMA_CLOUD_PROVIDER, OPENCODE_BASE,
     OPENCODE_MODELS, OPENCODE_PROVIDER, OPENROUTER_BASE, OPENROUTER_MODELS, OPENROUTER_PROVIDER,
-    ZAI_MODELS, ZAI_SUBSCRIPTION_BASE, ZAI_SUBSCRIPTION_PROVIDER, ZAI_USAGE_BASE,
-    ZAI_USAGE_PROVIDER,
+    OPENROUTER_VENDORS, ZAI_MODELS, ZAI_SUBSCRIPTION_BASE, ZAI_SUBSCRIPTION_PROVIDER,
+    ZAI_USAGE_BASE, ZAI_USAGE_PROVIDER,
 };
 use crate::ollama::Client;
 use crate::openai_compat;
 
-use super::App;
+use super::{App, StreamMsg};
 
 /// Backend that fulfills a chat turn. Ollama for local models, OpenAI-compat
 /// for any BYOK provider (z.ai subscription, z.ai usage-based, etc).
@@ -177,6 +179,73 @@ impl App {
                 });
             }
         }
+    }
+
+    /// Kick a background fetch of OpenRouter's live `/v1/models` catalog,
+    /// filter it down to the curated vendor set, and let the stream
+    /// handler swap the result into `extra_models`. No-op if no API key
+    /// is configured (the catalog endpoint is technically public, but
+    /// without a key we have no reason to refresh).
+    ///
+    /// Filtering rules (intentionally simple — see `OPENROUTER_VENDORS`):
+    ///   - Drop anything not from a whitelisted vendor.
+    ///   - Drop preview / experimental rows so the picker stays sane:
+    ///     anything with `preview` / `experimental` / `beta` / `test` in
+    ///     the id, the `~vendor/...-latest` alias rows (the `~` prefix is
+    ///     OpenRouter's alias marker, not a real ID we can call), and
+    ///     non-chat modalities like `-image`, `-tts`, `-embedding`,
+    ///     `-search`.
+    ///   - Free-tier `:free` variants stay — users can pick them
+    ///     deliberately when they don't want to spend credits.
+    pub fn refresh_openrouter_models(&self, tx: &mpsc::UnboundedSender<StreamMsg>) {
+        if self.openrouter_api_key.is_none() {
+            return;
+        }
+        let key = self.openrouter_api_key.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let raw = match openai_compat::fetch_openrouter_models(OPENROUTER_BASE, key.as_deref())
+                .await
+            {
+                Ok(list) => list,
+                Err(_) => {
+                    // Silent fail: the static seed still works as fallback,
+                    // and we don't want a transient network blip to clutter
+                    // the chat with errors. Status bar will already say
+                    // whatever it was before.
+                    return;
+                }
+            };
+            let filtered: Vec<String> = raw
+                .into_iter()
+                .filter(|id| {
+                    // `~vendor/...` are alias rows, not real IDs.
+                    if id.starts_with('~') {
+                        return false;
+                    }
+                    // Vendor prefix gate.
+                    let vendor = id.split('/').next().unwrap_or("");
+                    if !OPENROUTER_VENDORS.contains(&vendor) {
+                        return false;
+                    }
+                    // Drop non-chat modalities + experimental tags. Match
+                    // on the id substring; keeps the filter compact.
+                    let lower = id.to_ascii_lowercase();
+                    const REJECT: &[&str] = &[
+                        "preview",
+                        "experimental",
+                        "-beta",
+                        "-test",
+                        "-image",
+                        "-tts",
+                        "-embedding",
+                        "-search",
+                    ];
+                    !REJECT.iter().any(|tag| lower.contains(tag))
+                })
+                .collect();
+            let _ = tx.send(StreamMsg::OpenRouterModelsRefreshed(filtered));
+        });
     }
 
     /// Rewrite any `provider: "zai"` entries (pre-split config) to

@@ -1,9 +1,34 @@
 //! System-level stream handlers: host change (new model list), `/update`
 //! result, `/settings` edit-in-place.
 
+use crate::config::{ExtraModel, OPENROUTER_PROVIDER};
+
 use super::super::App;
 
 impl App {
+    /// Live OpenRouter catalog arrived — replace this provider's entries
+    /// in `extra_models` with the fresh list and persist. Anything else
+    /// (other providers, the active selection, etc.) is untouched.
+    pub(super) fn on_openrouter_models_refreshed(&mut self, models: Vec<String>) {
+        if models.is_empty() {
+            // Treat empty as "fetch failed silently" — keep whatever
+            // seed we have rather than blowing it away.
+            return;
+        }
+        self.extra_models
+            .retain(|m| m.provider != OPENROUTER_PROVIDER);
+        for name in &models {
+            self.extra_models.push(ExtraModel {
+                provider: OPENROUTER_PROVIDER.to_string(),
+                name: name.clone(),
+            });
+        }
+        self.persist_config();
+        // Status nudge so the user knows the refresh landed — not pushed
+        // as a chat message because it's chrome, not conversation.
+        self.status = format!("OpenRouter: {} models available", models.len());
+    }
+
     pub(super) fn on_models(&mut self, models: Vec<String>, base: String) {
         let n = models.len();
         self.models = models;

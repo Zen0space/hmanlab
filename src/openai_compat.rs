@@ -13,6 +13,44 @@ use std::pin::Pin;
 
 use crate::ollama::{ChatMessage, StreamItem, Tool, ToolCall, ToolCallFunction};
 
+/// Fetch OpenRouter's live model catalog from `/v1/models`. Public endpoint
+/// (no auth needed), but we accept a key so any rate-limit signals can be
+/// tied to the caller. Returns ALL model IDs in the order the API returns
+/// them — filtering / vendor-curating is the caller's job
+/// (`config::OPENROUTER_VENDORS`).
+///
+/// The endpoint shape is the OpenAI-compatible `{ data: [{ id, ... }] }`
+/// where each entry carries pricing, context length, etc. We pull only the
+/// `id` field — everything else is metadata the picker doesn't render.
+pub async fn fetch_openrouter_models(base: &str, api_key: Option<&str>) -> Result<Vec<String>> {
+    let url = format!("{}/models", base.trim_end_matches('/'));
+    let mut req = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| anyhow!("reqwest client: {e}"))?
+        .get(&url);
+    if let Some(k) = api_key {
+        req = req.bearer_auth(k);
+    }
+    let resp = req.send().await.map_err(|e| anyhow!("GET {url}: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("GET {url}: HTTP {}", resp.status()));
+    }
+    #[derive(Deserialize)]
+    struct ModelEntry {
+        id: String,
+    }
+    #[derive(Deserialize)]
+    struct ModelsBody {
+        data: Vec<ModelEntry>,
+    }
+    let body: ModelsBody = resp
+        .json()
+        .await
+        .map_err(|e| anyhow!("parse /models: {e}"))?;
+    Ok(body.data.into_iter().map(|m| m.id).collect())
+}
+
 #[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,

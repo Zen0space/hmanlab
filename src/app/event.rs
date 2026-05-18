@@ -37,7 +37,7 @@ impl App {
                 match self.mode {
                     Mode::ModelPicker => Ok(self.handle_picker(key)),
                     Mode::Confirm => Ok(self.handle_confirm(key)),
-                    Mode::AddModel => Ok(self.handle_add_model(key)),
+                    Mode::AddModel => Ok(self.handle_add_model(key, tx)),
                     Mode::SessionPicker => Ok(self.handle_session_picker(key, tx)),
                     Mode::DisconnectPicker => Ok(self.handle_disconnect_picker(key)),
                     Mode::Chat => Ok(self.handle_chat(key, tx)),

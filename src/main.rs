@@ -273,6 +273,13 @@ async fn run<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, mut app: 
         }
     });
 
+    // Live OpenRouter model catalog refresh on startup. If the user has an
+    // OpenRouter key configured, fetch `/v1/models` in the background and
+    // replace the static seed with whatever's current. Silent failure —
+    // the static seed in OPENROUTER_MODELS keeps working if openrouter.ai
+    // is unreachable.
+    app.refresh_openrouter_models(&tx);
+
     // Animation ticker: fires every 120 ms but is only polled while the agent
     // is generating or a tool is running (see the `if` guard on its select!
     // arm). Drives `app.anim_tick`, which the renderer uses to pulse the
