@@ -14,7 +14,7 @@ use crate::ollama::{ChatMessage, Client, ToolCall};
 use crate::tools;
 
 mod backend;
-mod event;
+pub mod event;
 pub mod inline;
 mod stream;
 
@@ -52,7 +52,8 @@ impl App {
     /// the workspace root and its immediate visible directories. Called once
     /// at startup (from `main`) and again whenever `/workspace` switches.
     pub fn seed_sidebar_top_level(&mut self) {
-        self.expanded_dirs = crate::ui::initial_expanded(&self.workspace);
+        self.expanded_dirs =
+            crate::ui::initial_expanded(&self.workspace, self.workspace_trusted);
         self.sidebar_scroll = 0;
     }
 
@@ -372,6 +373,39 @@ pub struct App {
     /// `Slash` when the user is typing `/<command>`, `File` when they're
     /// typing `@<path>`. Mutually exclusive; `None` otherwise.
     pub inline_popup: InlinePopup,
+    /// Index of the placeholder `info` message pushed by `/settings` while
+    /// the background `fetch_me` request is in flight. When the resolved
+    /// `StreamMsg::Settings` arrives, the stream handler edits the message
+    /// at this index in place instead of appending a second card — so
+    /// "refresh" actually refreshes rather than stacking placeholders.
+    pub pending_settings_msg_idx: Option<usize>,
+    /// Absolute workspace paths the user has explicitly authorised via
+    /// `/trust`. Persisted in `~/.config/hmanlab/config.json`.
+    pub trusted_workspaces: Vec<PathBuf>,
+    /// Cached "is `self.workspace` in `trusted_workspaces`" — recomputed
+    /// whenever either side changes (startup, `/workspace`, `/trust`,
+    /// `/untrust`). Used by the confirm interceptor in `app::stream`.
+    pub workspace_trusted: bool,
+    /// Scroll offset (in rendered lines) for the confirm popup body.
+    /// Reset to 0 on each new ConfirmRequest; ↑↓/PgUp/PgDn move it in
+    /// `handle_confirm`; clamped to a valid max by the renderer.
+    pub confirm_scroll: u16,
+    /// Diff that came in with the last *approved* ConfirmRequest. Picked
+    /// up by the next `ToolResult` and attached to the matching tool
+    /// message so clicking it later re-displays the diff inline. Cleared
+    /// once attached, or on deny / new turn.
+    pub pending_tool_diff: Option<Vec<tools::DiffLine>>,
+    /// Last mouse cursor position observed from `MouseEventKind::Moved`
+    /// events. Used by the chat renderer to highlight the hovered "reading
+    /// N files" card row so users see it's clickable without needing a
+    /// chevron or arrow icon. `(0, 0)` until the first Move event arrives.
+    pub hover_x: u16,
+    pub hover_y: u16,
+    /// One row per card file entry rendered this frame: logical line
+    /// index (NOT screen Y) + the message index it represents. Populated
+    /// by `ui::chat` each frame; consumed by the same renderer after the
+    /// paragraph is laid out to paint the hover overlay.
+    pub card_row_targets: Vec<(u16, usize)>,
 }
 
 impl App {
@@ -464,6 +498,14 @@ impl App {
             api_tx,
             update_available: None,
             inline_popup: InlinePopup::None,
+            pending_settings_msg_idx: None,
+            trusted_workspaces: Vec::new(),
+            workspace_trusted: false,
+            confirm_scroll: 0,
+            pending_tool_diff: None,
+            hover_x: 0,
+            hover_y: 0,
+            card_row_targets: Vec::new(),
         }
     }
 }

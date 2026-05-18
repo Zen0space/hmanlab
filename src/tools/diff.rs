@@ -138,6 +138,21 @@ pub(super) fn diff_write(prev: Option<&str>, new: &str) -> Vec<DiffLine> {
     out
 }
 
+/// Count `(added, removed)` lines in a built diff. Used by the write
+/// tools to put `+NL -NL` line totals in the confirm prompt instead of
+/// raw byte counts — much more legible at a glance.
+pub(super) fn diff_stats(diff: &[DiffLine]) -> (usize, usize) {
+    let (mut added, mut removed) = (0usize, 0usize);
+    for d in diff {
+        match d.kind {
+            DiffLineKind::Added => added += 1,
+            DiffLineKind::Removed => removed += 1,
+            DiffLineKind::Context | DiffLineKind::Summary => {}
+        }
+    }
+    (added, removed)
+}
+
 /// Limit the diff to MAX_DIFF_LINES so the popup stays readable; replace the
 /// overflow with a single "…(N more)" marker.
 fn truncate_diff(lines: Vec<DiffLine>, added: usize, removed: usize) -> Vec<DiffLine> {

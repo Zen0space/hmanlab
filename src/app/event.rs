@@ -37,6 +37,8 @@ enum Command {
     Disconnect(String),
     Update,
     Settings,
+    Trust,
+    Untrust,
     Unknown(String),
 }
 
@@ -82,6 +84,8 @@ fn parse_command(text: &str) -> Option<Command> {
         "disconnect" | "logout" | "signout" => Command::Disconnect(rest),
         "update" | "upgrade" | "selfupdate" => Command::Update,
         "settings" | "whoami" | "account" | "me" => Command::Settings,
+        "trust" | "authorize" | "authorise" => Command::Trust,
+        "untrust" | "unauthorize" | "unauthorise" => Command::Untrust,
         other => Command::Unknown(other.to_string()),
     })
 }
@@ -118,6 +122,12 @@ impl App {
         if self.mode != Mode::Chat {
             return;
         }
+        // Track cursor position on every mouse event so the hover overlay
+        // can highlight the row under the pointer — including mid-drag,
+        // mid-scroll, anything. Cheaper than a Moved-only branch and never
+        // gets stale.
+        self.hover_x = m.column;
+        self.hover_y = m.row;
         match m.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.sel_start = Some((m.column, m.row));
@@ -440,12 +450,15 @@ impl App {
                             self.selected_extra = None;
                             self.status = format!("Switched to {}", name);
                             self.mode = Mode::Chat;
+                            let _ = persist_last_model(&self.model, None);
                         }
                         PickerEntry::Extra(m) => {
                             self.model = m.name.clone();
                             self.status = format!("Switched to [{}] {}", m.provider, m.name);
+                            let provider = m.provider.clone();
                             self.selected_extra = Some(m);
                             self.mode = Mode::Chat;
+                            let _ = persist_last_model(&self.model, Some(&provider));
                         }
                         PickerEntry::AddZaiSubscription => {
                             self.begin_add_model(crate::config::ZAI_SUBSCRIPTION_PROVIDER);
@@ -471,8 +484,41 @@ impl App {
 
     fn handle_confirm(&mut self, key: KeyEvent) -> AppAction {
         match key.code {
+            // Scroll the diff body. ↑↓ for fine-grained, PgUp/PgDn for
+            // a page at a time. The renderer clamps to a valid max so
+            // saturating_add never runs past the end visibly.
+            KeyCode::Up => {
+                self.confirm_scroll = self.confirm_scroll.saturating_sub(1);
+                return AppAction::Continue;
+            }
+            KeyCode::Down => {
+                self.confirm_scroll = self.confirm_scroll.saturating_add(1);
+                return AppAction::Continue;
+            }
+            KeyCode::PageUp => {
+                self.confirm_scroll = self.confirm_scroll.saturating_sub(10);
+                return AppAction::Continue;
+            }
+            KeyCode::PageDown => {
+                self.confirm_scroll = self.confirm_scroll.saturating_add(10);
+                return AppAction::Continue;
+            }
+            KeyCode::Home => {
+                self.confirm_scroll = 0;
+                return AppAction::Continue;
+            }
+            KeyCode::End => {
+                self.confirm_scroll = u16::MAX;
+                return AppAction::Continue;
+            }
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 if let Some(req) = self.pending_confirm.take() {
+                    // Stash the diff so the next ToolResult attaches it to
+                    // the matching tool message (click-to-re-display). Skip
+                    // empty diffs (run_command etc. have no diff to show).
+                    if !req.diff.is_empty() {
+                        self.pending_tool_diff = Some(req.diff.clone());
+                    }
                     let _ = req.responder.send(true);
                     self.push_info(format!("✓ Allowed: {}", req.prompt));
                 }
@@ -483,6 +529,9 @@ impl App {
                     let _ = req.responder.send(false);
                     self.push_info(format!("✗ Denied: {}", req.prompt));
                 }
+                // Clear any stashed diff — denial means there's no tool
+                // message coming to attach it to.
+                self.pending_tool_diff = None;
                 self.mode = Mode::Chat;
             }
             _ => {}
@@ -678,7 +727,11 @@ impl App {
             Some(('@', filter)) => match &mut self.inline_popup {
                 InlinePopup::File(p) => p.set_filter(filter),
                 _ => {
-                    self.inline_popup = InlinePopup::File(FilePopup::new(filter, &self.workspace));
+                    self.inline_popup = InlinePopup::File(FilePopup::new(
+                        filter,
+                        &self.workspace,
+                        self.workspace_trusted,
+                    ));
                 }
             },
             _ => {
@@ -799,6 +852,8 @@ impl App {
             Command::Disconnect(name) => self.handle_disconnect(&name),
             Command::Update => self.start_update(tx),
             Command::Settings => self.show_settings(tx),
+            Command::Trust => self.trust_current_workspace(),
+            Command::Untrust => self.untrust_current_workspace(),
             Command::Unknown(name) => {
                 self.push_info(format!(
                     "Unknown command: /{name}\nType /help to see available commands."
@@ -993,6 +1048,7 @@ impl App {
             self.selected_extra = None;
             self.push_info(format!("Switched to model: {}", self.model));
             self.status = format!("Model: {}", self.model);
+            let _ = persist_last_model(&self.model, None);
         }
     }
 
@@ -1062,25 +1118,55 @@ impl App {
             ));
             return;
         }
-        let candidate = PathBuf::from(path);
-        let canonical = match candidate.canonicalize() {
+        // Expand `~` / `~/foo` to $HOME so users can paste home-relative
+        // paths the way they would in a shell.
+        let expanded = expand_tilde(path);
+        // Relative paths are resolved against the *current* workspace, not
+        // the process CWD. Without this, `/workspace ../sibling` always
+        // means "from where I launched hmanlab" — so chained switches like
+        // `/workspace ~/a` then `/workspace ../b` silently move from the
+        // process CWD again, which feels like /workspace only worked once.
+        let base = if expanded.is_absolute() {
+            expanded
+        } else {
+            self.workspace.join(expanded)
+        };
+        let canonical = match base.canonicalize() {
             Ok(p) if p.is_dir() => p,
             Ok(_) => {
                 self.push_info(format!("Not a directory: {path}"));
                 return;
             }
             Err(e) => {
-                self.push_info(format!("Cannot use '{path}': {e}"));
+                self.push_info(format!(
+                    "Cannot use '{path}' (resolved against {}): {e}",
+                    self.workspace.display()
+                ));
                 return;
             }
         };
+        if canonical == self.workspace {
+            self.push_info(format!(
+                "Already in workspace: {}",
+                self.workspace.display()
+            ));
+            return;
+        }
         self.workspace = canonical;
+        // Refresh trust BEFORE seeding the sidebar — the seed walk's
+        // dotfile visibility depends on `workspace_trusted`, so flipping
+        // the order would leave a trusted workspace's dotfiles hidden
+        // until the next manual collapse/expand.
+        self.refresh_workspace_trust();
         // Sidebar state belongs to the previous workspace — reset it so the
         // new workspace gets its own top-level expansion and a fresh scroll
         // position. Without this, the picker would still hold paths from
         // the old tree that no longer exist in the new one.
         self.seed_sidebar_top_level();
         self.push_info(format!("Workspace: {}", self.workspace.display()));
+        if !self.workspace_trusted {
+            self.push_info(workspace_trust_banner(&self.workspace));
+        }
         self.status = format!("Workspace: {}", self.workspace.display());
     }
 
@@ -1198,28 +1284,36 @@ impl App {
             }
             _ => current.to_string(),
         };
+        // Shared header — used verbatim both for the placeholder card
+        // (rendered synchronously) and for the resolved card the spawn
+        // sends back. Keeping the local block identical means the
+        // edit-in-place looks like a true refresh.
         let local = format!(
             "Settings\n\
              \x20 hmanlab version  : {version_line}\n\
              \x20 model            : {model}\n\
              \x20 ollama host      : {host}\n\
              \x20 BYOK providers   : {byok_line}\n\
-             \x20 workspace        : {ws}\n\
-             \n\
-             Account: loading…",
+             \x20 workspace        : {ws}",
             model = self.model,
             host = self.client.base,
             ws = self.workspace.display(),
         );
-        self.push_info(local);
+        self.push_info(format!("{local}\n\nAccount: loading…"));
+        // Stash the placeholder card's index so the resolved reply can
+        // overwrite it in place (see stream::StreamMsg::Settings).
+        self.pending_settings_msg_idx = Some(self.messages.len().saturating_sub(1));
         self.status = "Loading account info…".into();
 
         let Some(api) = self.api.clone() else {
-            // No auth client → nothing to fetch. The local block above
-            // already covers everything we can show.
+            // No auth client → nothing to fetch. The placeholder above is
+            // all we'll have; drop the pending index so a later /settings
+            // call doesn't try to edit it.
+            self.pending_settings_msg_idx = None;
             return;
         };
         let current_owned = current.to_string();
+        let local_owned = local;
         let tx = tx.clone();
         tokio::spawn(async move {
             let me = api.fetch_me().await;
@@ -1250,7 +1344,12 @@ impl App {
                 Some(l) => format!("\n\nnpm latest: {l} (you're up to date)."),
                 None => String::new(),
             };
-            let _ = tx.send(StreamMsg::Settings(format!("{account}{version_tail}")));
+            // Send the full resolved card; the handler decides whether
+            // to edit-in-place (pending_settings_msg_idx still set) or
+            // append (e.g. user re-ran /settings in the meantime).
+            let _ = tx.send(StreamMsg::Settings(format!(
+                "{local_owned}\n\n{account}{version_tail}"
+            )));
         });
     }
 
@@ -1941,4 +2040,113 @@ impl App {
         });
         self.compact_task = Some(handle);
     }
+
+    /// Recompute `workspace_trusted` from the persisted list. Call after
+    /// `self.workspace` changes (startup, `/workspace`, `/trust`, `/untrust`).
+    pub(super) fn refresh_workspace_trust(&mut self) {
+        self.workspace_trusted = self.trusted_workspaces.iter().any(|p| p == &self.workspace);
+    }
+
+    /// Mark the current workspace as trusted and persist it to config.
+    pub(super) fn trust_current_workspace(&mut self) {
+        if self.workspace_trusted {
+            self.push_info(format!(
+                "Workspace already trusted: {}",
+                self.workspace.display()
+            ));
+            return;
+        }
+        self.trusted_workspaces.push(self.workspace.clone());
+        self.workspace_trusted = true;
+        // Re-seed the sidebar so dotfiles (.env, .hmanlab, etc.) become
+        // visible immediately — without this the tree only refreshes on
+        // a manual collapse/expand or workspace switch.
+        self.seed_sidebar_top_level();
+        if let Err(e) = persist_trusted_workspaces(&self.trusted_workspaces) {
+            self.push_info(format!("Trusted in-session, but failed to save: {e}"));
+            return;
+        }
+        self.push_info(format!(
+            "Trusted workspace: {}\nThe agent can now edit files, run shell commands, \
+             and save memories here. Hidden files are visible in the sidebar.",
+            self.workspace.display()
+        ));
+        self.status = "Workspace trusted".into();
+    }
+
+    /// Remove the current workspace from the persisted trusted list.
+    pub(super) fn untrust_current_workspace(&mut self) {
+        let before = self.trusted_workspaces.len();
+        self.trusted_workspaces.retain(|p| p != &self.workspace);
+        if self.trusted_workspaces.len() == before {
+            self.push_info(format!(
+                "Workspace wasn't trusted: {}",
+                self.workspace.display()
+            ));
+            return;
+        }
+        self.workspace_trusted = false;
+        // Re-seed so the sidebar hides dotfiles again now that they're no
+        // longer authorised — keeps the visible tree consistent with what
+        // the agent can actually touch.
+        self.seed_sidebar_top_level();
+        if let Err(e) = persist_trusted_workspaces(&self.trusted_workspaces) {
+            self.push_info(format!("Untrusted in-session, but failed to save: {e}"));
+            return;
+        }
+        self.push_info(format!(
+            "Untrusted workspace: {}\nDestructive tools are now blocked here. \
+             Hidden files are hidden in the sidebar.",
+            self.workspace.display()
+        ));
+        self.status = "Workspace untrusted".into();
+    }
+}
+
+/// Expand a leading `~` to `$HOME` (handles both `~` and `~/path`). Any
+/// other path is returned unchanged. Cross-platform: silently no-ops if
+/// `$HOME` isn't set.
+fn expand_tilde(path: &str) -> PathBuf {
+    if path == "~" {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home);
+        }
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+/// Banner shown on entry to an untrusted workspace. Tells the user what's
+/// gated and how to unblock it.
+pub fn workspace_trust_banner(workspace: &std::path::Path) -> String {
+    format!(
+        "⚠ Untrusted workspace: {}\n\
+         File edits, shell commands, and memory writes are blocked here.\n\
+         Run /trust to authorise this workspace, or /workspace <path> to switch.",
+        workspace.display()
+    )
+}
+
+/// Rewrite the persisted config with the given trusted list. Loads the
+/// existing config (or starts fresh if none), updates only the trusted
+/// field, and saves. Keeping the rest of the config untouched is important
+/// — we don't want /trust to clobber BYOK keys.
+fn persist_trusted_workspaces(trusted: &[PathBuf]) -> anyhow::Result<()> {
+    let mut cfg = crate::config::load()?.unwrap_or_default();
+    cfg.trusted_workspaces = trusted.iter().map(|p| p.display().to_string()).collect();
+    crate::config::save(&cfg)
+}
+
+/// Persist the user's currently-selected model so the next launch boots
+/// straight into it. `provider = None` means Ollama; otherwise it's the
+/// `ExtraModel::provider` tag. Best-effort — a write failure is logged to
+/// the chat as info but never aborts the model switch itself.
+pub(super) fn persist_last_model(model: &str, provider: Option<&str>) -> anyhow::Result<()> {
+    let mut cfg = crate::config::load()?.unwrap_or_default();
+    cfg.last_model = Some(model.to_string());
+    cfg.last_provider = provider.map(|s| s.to_string());
+    crate::config::save(&cfg)
 }

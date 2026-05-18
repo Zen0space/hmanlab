@@ -227,7 +227,7 @@ pub(super) fn render_add_model(f: &mut Frame, full: Rect, app: &mut App) {
     );
 }
 
-pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
+pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &mut App) {
     // Bigger popup than before — edit_file/write_file prompts include old/new
     // string previews that easily overflow the 70x40 box the original
     // run_command-style confirm was sized for.
@@ -295,28 +295,30 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
             }
         }
     }
-    let visible = content_area.height as usize;
-    let overflow = lines.len().saturating_sub(visible);
-    if overflow > 0 {
-        // Mark truncation in the last visible line so the user knows there
-        // was more they didn't see — typical for a write_file with a big
-        // content blob. The footer remains untouched below.
-        let last_idx = visible.saturating_sub(1);
-        lines.truncate(last_idx);
-        lines.push(Line::from(Span::styled(
-            format!(
-                "…({} more lines hidden — deny + ask AI to shorten if needed)",
-                overflow
-            ),
-            Style::default()
-                .fg(theme::color::FG_DIM)
-                .add_modifier(Modifier::ITALIC),
-        )));
+    // Clamp scroll so End / PgDn-past-end snaps to the last full screen.
+    // `Paragraph::scroll` doesn't itself clamp, so without this an u16::MAX
+    // would render an empty box.
+    let total_lines = lines.len() as u16;
+    let visible = content_area.height;
+    let max_scroll = total_lines.saturating_sub(visible);
+    if app.confirm_scroll > max_scroll {
+        app.confirm_scroll = max_scroll;
     }
+    let scroll = app.confirm_scroll;
 
-    let body = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let body = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll, 0));
     f.render_widget(body, content_area);
 
+    // Footer: scroll position (if any) on the right of the action keys, so
+    // long diffs make it obvious there's more below.
+    let scroll_hint = if max_scroll > 0 {
+        let shown_end = (scroll as usize + visible as usize).min(total_lines as usize);
+        format!("  ·  ↑↓ PgUp/PgDn scroll  ·  {}/{} lines", shown_end, total_lines)
+    } else {
+        String::new()
+    };
     let footer = Paragraph::new(Line::from(vec![
         Span::styled(
             "[y]",
@@ -334,6 +336,7 @@ pub(super) fn render_confirm(f: &mut Frame, full: Rect, app: &App) {
         Span::styled(" deny   ", Style::default().fg(theme::color::FG)),
         Span::styled("[Esc]", Style::default().fg(theme::color::FG_DIM)),
         Span::styled(" deny", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(scroll_hint, Style::default().fg(theme::color::FG_DIM)),
     ]));
     f.render_widget(footer, footer_area);
 }

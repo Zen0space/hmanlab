@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-05-18
+
+### Added
+- **Workspace trust gate.** Launching in a workspace that isn't on the persisted trusted list now shows a pre-TUI arrow-key + Enter prompt (`▎ Workspace trust`) before the alternate screen opens. Choice is saved in `~/.config/hmanlab/config.json` (`trusted_workspaces: []`) so repeat launches in the same folder don't re-ask. New `/trust` and `/untrust` slash commands flip it later. Destructive tools (`write_file`, `edit_file`, `multi_edit`, `run_command`, `save_memory`, `forget_memory`) auto-deny in untrusted workspaces via a short-circuit in the `StreamMsg::ConfirmRequest` handler — read-only tools (`read_file`, `list_dir`, `find_files`, `git_*`, `read_memory`) work either way. Sidebar + `@`-mention autocomplete reveal dotfiles (`.env`, `.hmanlab/`, `.editorconfig`) **only when trusted** — build-artefact dirs (`.git`, `target`, `node_modules`) stay hidden regardless. Non-TTY launches skip the prompt and stay untrusted.
+- **`multi_edit` tool.** Batches N `{old_string, new_string}` edits to the same file in one call, one approval popup, one cumulative diff. Mirrors Claude Code's `MultiEdit` so any model trained on those traces reaches for it automatically; system prompt nudges the rest. All-or-nothing: a mid-batch validation failure (snippet missing, ambiguous, empty, no-op) leaves the on-disk file untouched and names the failing edit index. Eliminates the "6 sequential edit_file calls + 6 confirms for one README touch-up" pattern.
+- **Model persistence across sessions and restarts.** New `last_model` / `last_provider` fields in `config.json` are written on every `/model` switch (picker or `/model <name>`) and reused on the next launch as the second-priority initial model (after `--model` flag, before alphabetical Ollama fallback). Loading a saved session via `/load` no longer overwrites your currently-selected model — a one-line info card surfaces the original session's model so you can `/model` back if you want.
+- **Scrollable confirm popup.** Long diffs no longer truncate with "…N more lines hidden". `↑↓` scrolls one line, `PgUp/PgDn` ten, `Home/End` jump. Position indicator (`35/120 lines`) sits in the footer next to the `[y] allow [n] deny [Esc] deny` row, which stays pinned regardless of scroll. Per-prompt scroll resets so a new confirm starts at the top.
+- **Click tool message to re-see diff.** `write_file` / `edit_file` / `multi_edit` / `save_memory` tool rows now carry the authorised diff (`diff: Option<Vec<DiffLine>>` on `ChatMessage`, `#[serde(skip)]` — UI-only). Click the row (or Ctrl+T expand-all) and the diff re-renders inline with the same green/red/dim/yellow palette as the confirm popup. Read-only tools still show their raw text output on expand.
+- **Read-card consolidation.** Consecutive collapsed read-only tool calls coalesce into a single borderless tile with a `reading N files` header, list of paths in dim grey, and `BG_CARD` (catppuccin surface0) bg fill. Hidden messages don't break runs; expanding any single tool breaks it out of the group on the next frame.
+- **Hover-highlight on card rows.** Cursor over a clickable card file row repaints with `BG_CARD_HOVER` (surface2) bg via direct buffer mutation post-render — gives a "this is clickable" affordance without adding a chevron or arrow icon. Tracked via `hover_x` / `hover_y` updated on every mouse event.
+- **First-round visual polish.** Each message body line now carries a colored `▎` gutter bar in role accent (sky/green/lavender/peach). Role labels reformatted to `▎ user` / `▎ assistant` / `▎ tool` / `▎ system`. Plain-text capture for copy-on-drag stays as spaces so the bar glyph isn't grabbed by selection.
+
+### Changed
+- **`git_show` returns full message + diff** instead of `--stat`-only summary. One call now answers "read the latest commit" (`rev: "HEAD"`); big commits still tail-truncate via the shared `MAX_CMD_BYTES` cap, in which case the model falls back to `git_diff` with a `path:` filter.
+- **`/workspace` is repeatable.** Relative paths used to canonicalise against the process CWD, so `/workspace ../sibling` always meant "from the dir I started in" and chained switches felt broken. Now resolves against `self.workspace` and expands `~` / `~/path` against `$HOME`. Error messages include the base path used so failures are diagnosable. No-op switches print `Already in workspace: …` instead of silently re-seeding.
+- **`/settings` mutates in place instead of stacking a second card.** The placeholder "Account: loading…" card is now overwritten by the resolved `StreamMsg::Settings` reply via a stashed message index (`pending_settings_msg_idx`). Refresh feels like an actual refresh; falls back to append if the index drifted (`/clear` mid-flight, etc.).
+- **Confirm prompts report `+NL -NL` instead of bytes.** Both `edit_file` and `write_file` now compute the diff first, derive line totals from it, then format the prompt — same shape used by `multi_edit`. Bytes still appear in the tool result text where the count is genuinely useful.
+- **Agent loop cap raised: `MAX_TURNS` 10 → 50.** The previous panic-button triggered on legit multi-file work (15–30 tool calls is routine for refactors). Error message rewritten to call out "model likely stuck in a loop" instead of being mistaken for a chat-history limit.
+
+### Fixed
+- **`/workspace` only worked once.** Root cause: `PathBuf::canonicalize()` resolves relative paths against the process CWD, not the current workspace. See "Changed" above.
+
+[0.1.9]: https://github.com/hmanlab/hmanlab/compare/0.1.8...0.1.9
+
 ## [0.1.8] - 2026-05-18
 
 ### Fixed

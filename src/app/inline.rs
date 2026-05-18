@@ -62,6 +62,14 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         desc: "change agent workspace",
     },
     SlashCommand {
+        name: "trust",
+        desc: "authorise this workspace for file edits & shell",
+    },
+    SlashCommand {
+        name: "untrust",
+        desc: "remove this workspace from the trusted list",
+    },
+    SlashCommand {
         name: "compact",
         desc: "manually compact conversation",
     },
@@ -145,8 +153,8 @@ impl SlashPopup {
 }
 
 impl FilePopup {
-    pub fn new(filter: String, workspace: &Path) -> Self {
-        let workspace_files = walk_workspace(workspace);
+    pub fn new(filter: String, workspace: &Path, show_hidden: bool) -> Self {
+        let workspace_files = walk_workspace(workspace, show_hidden);
         let matches = filter_files(&filter, &workspace_files);
         Self {
             filter,
@@ -244,11 +252,12 @@ const MAX_FILES: usize = 5000;
 
 /// Walk `workspace` and collect relative paths of files + dirs, skipping
 /// the standard build-artefact directories. Synchronous and best-effort:
-/// errors mid-walk just stop that branch.
-fn walk_workspace(workspace: &Path) -> Vec<PathBuf> {
+/// errors mid-walk just stop that branch. `show_hidden` reveals dotfiles
+/// (kept in sync with the sidebar's trust-gated visibility).
+fn walk_workspace(workspace: &Path, show_hidden: bool) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
-    walk_into(workspace, workspace, &mut out, &mut visited);
+    walk_into(workspace, workspace, show_hidden, &mut out, &mut visited);
     // Sort: directories first, then alphabetical within each group.
     // Matches what the sidebar shows so the mental model is consistent.
     out.sort_by(|a, b| {
@@ -259,7 +268,13 @@ fn walk_workspace(workspace: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn walk_into(workspace: &Path, dir: &Path, out: &mut Vec<PathBuf>, visited: &mut HashSet<PathBuf>) {
+fn walk_into(
+    workspace: &Path,
+    dir: &Path,
+    show_hidden: bool,
+    out: &mut Vec<PathBuf>,
+    visited: &mut HashSet<PathBuf>,
+) {
     if out.len() >= MAX_FILES {
         return;
     }
@@ -276,7 +291,7 @@ fn walk_into(workspace: &Path, dir: &Path, out: &mut Vec<PathBuf>, visited: &mut
             return;
         }
         let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        if name.starts_with('.') && !show_hidden {
             continue;
         }
         let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -290,7 +305,7 @@ fn walk_into(workspace: &Path, dir: &Path, out: &mut Vec<PathBuf>, visited: &mut
             .unwrap_or_else(|_| full.clone());
         out.push(rel);
         if is_dir {
-            walk_into(workspace, &full, out, visited);
+            walk_into(workspace, &full, show_hidden, out, visited);
         }
     }
 }

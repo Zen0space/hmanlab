@@ -98,9 +98,16 @@ impl App {
                 // (and from the DB, which breaks training data for any tool
                 // that requires confirmation).
                 let mut to_persist: Option<(String, String)> = None;
+                // Take ownership now so attaching it to the message moves
+                // it (the diff is large-ish and we don't want to clone).
+                let pending_diff = self.pending_tool_diff.take();
                 for msg in self.messages.iter_mut().rev() {
                     if msg.role == "tool" {
                         msg.content = output.clone();
+                        // Attach the diff that the user just authorised so
+                        // clicking the tool row later re-renders it inline.
+                        // Tools without a diff (run_command, etc.) get None.
+                        msg.diff = pending_diff;
                         if let Some(n) = msg.name.clone() {
                             to_persist = Some((n, output));
                         }
@@ -121,9 +128,27 @@ impl App {
                 self.follow = true;
             }
             StreamMsg::ConfirmRequest(req) => {
-                self.pending_confirm = Some(req);
-                self.mode = Mode::Confirm;
-                self.status = "Confirmation needed — y/n".into();
+                if !self.workspace_trusted {
+                    // Trust gate: short-circuit before showing the popup.
+                    // Sending `false` through the oneshot makes the tool
+                    // return "user denied" to the agent loop, which then
+                    // surfaces it as a normal tool error in the chat.
+                    let _ = req.responder.send(false);
+                    self.push_info(format!(
+                        "Blocked: {}\nWorkspace not trusted. Run /trust to authorise this folder, \
+                         or /workspace <path> to switch.",
+                        req.prompt
+                    ));
+                    self.status = "Blocked — workspace not trusted".into();
+                } else {
+                    self.pending_confirm = Some(req);
+                    self.mode = Mode::Confirm;
+                    // Fresh prompt → start at the top. Without this, a long
+                    // first diff scrolled to its bottom would still be
+                    // scrolled when the next, possibly-short prompt opens.
+                    self.confirm_scroll = 0;
+                    self.status = "Confirmation needed — y/n".into();
+                }
             }
             StreamMsg::Done {
                 prompt_tokens,
@@ -256,7 +281,24 @@ impl App {
                 self.push_info(text);
             }
             StreamMsg::Settings(text) => {
-                self.push_info(text);
+                // Edit-in-place: if the placeholder card is still where we
+                // left it (an `info` message at the stashed index), overwrite
+                // its content instead of appending. Falls back to push_info
+                // if the index drifted (e.g. /clear or another /settings
+                // raced ours).
+                match self.pending_settings_msg_idx.take() {
+                    Some(idx)
+                        if self
+                            .messages
+                            .get(idx)
+                            .map(|m| m.role == "info")
+                            .unwrap_or(false) =>
+                    {
+                        self.messages[idx].content = text;
+                        self.follow = true;
+                    }
+                    _ => self.push_info(text),
+                }
                 self.status = "Settings loaded".into();
             }
             StreamMsg::UpdateResult { ok, text } => {
@@ -311,21 +353,17 @@ impl App {
                         ..Default::default()
                     });
                 }
-                if let Some(model) = &session.model {
-                    if self.models.iter().any(|m| m == model) {
-                        // Ollama-discovered model: clear any active extra so
-                        // routing goes to Ollama.
-                        self.model = model.clone();
-                        self.selected_extra = None;
-                    } else if let Some(em) =
-                        self.extra_models.iter().find(|m| &m.name == model).cloned()
-                    {
-                        // Extra-provider model. If the same name exists for
-                        // multiple providers (e.g. glm-4.7 on both z.ai
-                        // plans), this picks the first one in extra_models —
-                        // user can /model via picker to switch plans.
-                        self.model = em.name.clone();
-                        self.selected_extra = Some(em);
+                // The loaded session has its own recorded model, but the
+                // user's current selection wins — switching sessions
+                // shouldn't silently bounce them off the model they just
+                // picked. Surface the difference inline so they can
+                // /model back to the session's original if they want.
+                if let Some(recorded) = session.model.as_deref() {
+                    if recorded != self.model {
+                        self.push_info(format!(
+                            "Loaded session previously used {recorded}; continuing with your current model ({}). Run /model to switch.",
+                            self.model
+                        ));
                     }
                 }
                 let session_id = session.id.clone();

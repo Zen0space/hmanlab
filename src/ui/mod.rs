@@ -148,19 +148,34 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, app: &App) {
-    let help = " /help • drag:copy • wheel:scroll • Ctrl+T:fold ";
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
     f.render_widget(
-        Paragraph::new(app.status.as_str()).style(Style::default().fg(theme::color::FG)),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "▎ ",
+                Style::default().fg(theme::color::ACCENT_ALT),
+            ),
+            Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
+        ])),
         chunks[0],
     );
+    let help = Line::from(vec![
+        Span::styled("/help", Style::default().fg(theme::color::FG)),
+        Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("drag", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(" copy", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("wheel", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(" scroll", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
+        Span::styled("^T", Style::default().fg(theme::color::FG_DIM)),
+        Span::styled(" fold ", Style::default().fg(theme::color::FG_DIMMER)),
+    ]);
     f.render_widget(
-        Paragraph::new(help)
-            .style(Style::default().fg(theme::color::FG_DIM))
-            .alignment(Alignment::Right),
+        Paragraph::new(help).alignment(Alignment::Right),
         chunks[1],
     );
 }

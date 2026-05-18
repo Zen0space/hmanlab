@@ -80,6 +80,19 @@ fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> String {
             get_str("rev").unwrap_or_else(|| "?".into())
         ),
         "edit_file" | "Edit" => format!("edit · {}", get_str("path").unwrap_or_else(|| "?".into())),
+        "multi_edit" | "MultiEdit" => {
+            let path = get_str("path").unwrap_or_else(|| "?".into());
+            let count = args
+                .and_then(|v| v.get("edits"))
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if count > 0 {
+                format!("multi-edit · {path} ({count} edits)")
+            } else {
+                format!("multi-edit · {path}")
+            }
+        }
         "write_file" | "Write" => {
             format!("write · {}", get_str("path").unwrap_or_else(|| "?".into()))
         }
@@ -93,6 +106,84 @@ fn tool_summary(name: &str, args: Option<&serde_json::Value>) -> String {
             format!("{other}({json})")
         }
     }
+}
+
+/// Membership info for the "reading N files" consolidation card. Set on
+/// every message that's part of a run of consecutive collapsed read-only
+/// tool calls (see `compute_read_groups`); `None` for everything else.
+#[derive(Clone, Copy)]
+struct ReadGroup {
+    /// Index of the first visible message in the run — anchor for the
+    /// `reading N files` header.
+    first: usize,
+    /// Index of the last visible message in the run — used to know when
+    /// to emit the trailing spacer.
+    last: usize,
+    /// Total number of visible messages in the run. Drives the header
+    /// count and decides whether to consolidate at all (requires ≥ 2).
+    count: usize,
+}
+
+/// Compute consolidation groups: runs of ≥ 2 consecutive **collapsed**
+/// read-only tool messages, skipping any hidden messages between them.
+/// Returns a vec parallel to `messages` — `Some(g)` means msg is part of
+/// the consolidation card, `None` means it renders standalone.
+fn compute_read_groups(
+    messages: &[crate::ollama::ChatMessage],
+    expanded: &std::collections::HashSet<usize>,
+) -> Vec<Option<ReadGroup>> {
+    let mut out = vec![None; messages.len()];
+    let visible: Vec<usize> = messages
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| !m.hidden)
+        .map(|(i, _)| i)
+        .collect();
+
+    let groupable = |i: usize| -> bool {
+        let m = &messages[i];
+        m.role == "tool"
+            && crate::tools::is_readonly_tool(m.name.as_deref().unwrap_or(""))
+            && !expanded.contains(&i)
+    };
+
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, out: &mut Vec<Option<ReadGroup>>| {
+        if run.len() >= 2 {
+            let info = ReadGroup {
+                first: run[0],
+                last: *run.last().unwrap(),
+                count: run.len(),
+            };
+            for &k in run.iter() {
+                out[k] = Some(info);
+            }
+        }
+        run.clear();
+    };
+    for &idx in &visible {
+        if groupable(idx) {
+            run.push(idx);
+        } else {
+            flush(&mut run, &mut out);
+        }
+    }
+    flush(&mut run, &mut out);
+    out
+}
+
+/// Build one full-width line for a "reading N files" card. The bg color
+/// fills from column 0 all the way to `width`, so consecutive card lines
+/// stack into a single visual block without a border.
+fn card_line(prefix: &str, text: &str, fg: Color, bg: Color, width: usize) -> Line<'static> {
+    let used = prefix.chars().count() + text.chars().count();
+    let pad = width.saturating_sub(used);
+    let pad_str = if pad > 0 { " ".repeat(pad) } else { String::new() };
+    Line::from(vec![
+        Span::styled(prefix.to_string(), Style::default().bg(bg)),
+        Span::styled(text.to_string(), Style::default().fg(fg).bg(bg)),
+        Span::styled(pad_str, Style::default().bg(bg)),
+    ])
 }
 
 /// Find the arguments the model passed to the tool call that produced
@@ -135,8 +226,12 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     app.chat_w = inner.width;
     app.chat_h = inner.height;
 
-    // 2-char indent under each speaker label; wrap to the remaining width.
+    // 2-col gutter under each speaker label: rendered as a colored `▎` bar
+    // in the role's color, but recorded in `text_lines` as two spaces so
+    // copy-on-drag doesn't grab the bar glyph and selection cell-widths
+    // still line up.
     let indent = "  ";
+    let gutter_glyph = "▎ ";
     let content_width = (inner.width as usize).saturating_sub(indent.len()).max(10);
 
     let mut lines: Vec<Line> = Vec::new();
@@ -145,8 +240,67 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
     let mut text_lines: Vec<String> = Vec::new();
     let mut ranges: Vec<(usize, u16, u16)> = Vec::with_capacity(app.messages.len());
     let last_idx = app.messages.len().saturating_sub(1);
+    // Read-card grouping: consecutive collapsed read-only tool messages
+    // (read_file, list_dir, git_*, etc.) coalesce into a single tinted
+    // tile rather than rendering as N standalone rows. Expanding any tool
+    // breaks it out of the group and shows its full output (and diff if
+    // applicable) the normal way.
+    let read_groups = compute_read_groups(&app.messages, &app.expanded_tools);
+    let card_bg = theme::color::BG_CARD;
+    let card_width = inner.width as usize;
+    // Reset per-frame hover hit-test list — populated below as each card
+    // file row is emitted, consumed after the paragraph render to paint
+    // the hover overlay on whichever row is under the cursor.
+    app.card_row_targets.clear();
     for (i, msg) in app.messages.iter().enumerate() {
         if msg.hidden {
+            continue;
+        }
+        // Card-grouped rendering: header row (once) + one dim file row
+        // per member. Each file row's line range maps back to its
+        // message index so clicking it still toggles that single tool's
+        // expansion (and breaks it out of the group on the next frame).
+        if let Some(group) = read_groups[i] {
+            let line_start = lines.len() as u16;
+            if i == group.first {
+                let header_text = format!("reading {} files", group.count);
+                text_lines.push(format!("  {header_text}"));
+                lines.push(card_line(
+                    "  ",
+                    &header_text,
+                    theme::color::FG,
+                    card_bg,
+                    card_width,
+                ));
+            }
+            let summary = tool_summary(
+                msg.name.as_deref().unwrap_or("tool"),
+                args_for_tool_msg(&app.messages, i),
+            );
+            text_lines.push(format!("    {summary}"));
+            lines.push(card_line(
+                "    ",
+                &summary,
+                theme::color::FG_DIM,
+                card_bg,
+                card_width,
+            ));
+            // Range covers just this msg's row inside the card.
+            let line_end_excl = lines.len() as u16;
+            let logical_row = line_end_excl.saturating_sub(1);
+            ranges.push((i, logical_row, line_end_excl));
+            // Record this row as a hover target — the post-render overlay
+            // below uses this to know which screen row to repaint with the
+            // hover bg when the cursor lands on it.
+            app.card_row_targets.push((logical_row, i));
+            // Spacer goes AFTER the last group member, not between them
+            // (that's what makes the card read as one block).
+            if i == group.last && i != last_idx {
+                text_lines.push(String::new());
+                lines.push(Line::from(""));
+            }
+            // Done with this message — skip the standalone render below.
+            let _ = line_start;
             continue;
         }
         let line_start = lines.len() as u16;
@@ -272,7 +426,10 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         text_lines.push(plain);
                         let mut line_spans: Vec<Span<'static>> =
                             Vec::with_capacity(spans.len() + 1);
-                        line_spans.push(Span::raw(indent.to_string()));
+                        line_spans.push(Span::styled(
+                            gutter_glyph.to_string(),
+                            Style::default().fg(theme::color::FG_DIMMER),
+                        ));
                         line_spans.extend(spans);
                         lines.push(Line::from(line_spans));
                     }
@@ -284,7 +441,50 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
 
         // Render body, unless this is a collapsed tool.
         let show_body = !is_tool || tool_expanded;
-        if show_body {
+        // Tools that went through y/n approval (write_file, edit_file,
+        // save_memory) carry the authorised diff. When the tool row is
+        // expanded, we render that diff colourised instead of the raw
+        // text result — re-using the same green/red/dim scheme as the
+        // confirm popup. The text fallback below still runs for tools
+        // without a diff (read_file, run_command, etc.).
+        let render_diff = is_tool && tool_expanded && msg.diff.is_some();
+        if render_diff {
+            if let Some(diff) = msg.diff.as_ref() {
+                let gutter_style = Style::default().fg(theme::color::FG_DIMMER);
+                for dl in diff {
+                    let style = match dl.kind {
+                        crate::tools::DiffLineKind::Added => {
+                            Style::default().fg(theme::color::SUCCESS)
+                        }
+                        crate::tools::DiffLineKind::Removed => {
+                            Style::default().fg(theme::color::ERROR)
+                        }
+                        crate::tools::DiffLineKind::Context => {
+                            Style::default().fg(theme::color::FG_DIM)
+                        }
+                        crate::tools::DiffLineKind::Summary => Style::default()
+                            .fg(theme::color::WARNING)
+                            .add_modifier(Modifier::BOLD),
+                    };
+                    for spans in wrap_styled_segments(
+                        vec![(dl.text.clone(), style)],
+                        content_width,
+                    ) {
+                        let mut plain = String::with_capacity(content_width);
+                        plain.push_str(indent);
+                        for span in &spans {
+                            plain.push_str(span.content.as_ref());
+                        }
+                        text_lines.push(plain);
+                        let mut line_spans: Vec<Span<'static>> =
+                            Vec::with_capacity(spans.len() + 1);
+                        line_spans.push(Span::styled(gutter_glyph.to_string(), gutter_style));
+                        line_spans.extend(spans);
+                        lines.push(Line::from(line_spans));
+                    }
+                }
+            }
+        } else if show_body {
             if trimmed.trim().is_empty() {
                 if msg.role == "assistant"
                     && is_streaming_here
@@ -295,14 +495,18 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                     // non-reasoning model not having streamed any tokens).
                     // Color pulses on `app.anim_tick`; the line text is plain
                     // so copy-on-drag still captures something sensible.
-                    let breath_text = format!("{indent}● thinking");
-                    text_lines.push(breath_text.clone());
-                    lines.push(Line::from(Span::styled(
-                        breath_text,
-                        Style::default()
-                            .fg(thinking_breath(app.anim_tick))
-                            .add_modifier(Modifier::BOLD),
-                    )));
+                    let plain_text = format!("{indent}● thinking");
+                    text_lines.push(plain_text);
+                    let breath = thinking_breath(app.anim_tick);
+                    lines.push(Line::from(vec![
+                        Span::styled(gutter_glyph.to_string(), Style::default().fg(breath)),
+                        Span::styled(
+                            "● thinking",
+                            Style::default()
+                                .fg(breath)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]));
                 }
             } else {
                 let base_style = match msg.role.as_str() {
@@ -312,6 +516,9 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                     "tool" => Style::default().fg(theme::color::TOOL),
                     _ => Style::default().fg(theme::color::FG),
                 };
+                // Dim version of the role color for the body gutter — full
+                // saturation reads as too loud when it runs down every line.
+                let gutter_style = Style::default().fg(theme::color::FG_DIMMER);
                 for paragraph in trimmed.split('\n') {
                     if paragraph.is_empty() {
                         text_lines.push(String::new());
@@ -329,7 +536,8 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
                         text_lines.push(plain);
                         let mut line_spans: Vec<Span<'static>> =
                             Vec::with_capacity(spans.len() + 1);
-                        line_spans.push(Span::raw(indent.to_string()));
+                        line_spans
+                            .push(Span::styled(gutter_glyph.to_string(), gutter_style));
                         line_spans.extend(spans);
                         lines.push(Line::from(line_spans));
                     }
@@ -370,6 +578,44 @@ pub(super) fn render_chat(f: &mut Frame, area: Rect, app: &mut App) {
         .wrap(Wrap { trim: false })
         .scroll((app.scroll, 0));
     f.render_widget(para, area);
+
+    // Hover overlay for card rows. Repaint the cell bg for whichever
+    // card file row sits under the cursor — gives a "this is clickable"
+    // affordance without adding a chevron / arrow. Done by mutating the
+    // buffer post-render so we don't have to know the hover row at
+    // line-build time (which is awkward because the scroll offset is
+    // computed *after* lines are assembled).
+    if app.hover_x >= inner.x
+        && app.hover_x < inner.x.saturating_add(inner.width)
+        && app.hover_y >= inner.y
+        && app.hover_y < inner.y.saturating_add(inner.height)
+    {
+        // Translate hover screen Y back to a logical line index using the
+        // same scroll offset the paragraph rendered with.
+        let hovered_logical = (app.hover_y as u32)
+            .saturating_sub(inner.y as u32)
+            .saturating_add(app.scroll as u32);
+        // O(N) over visible card rows — N is usually 2–10, never enough
+        // to matter. Bail on the first match because each logical row
+        // belongs to one card entry.
+        let hit = app
+            .card_row_targets
+            .iter()
+            .any(|(row, _)| *row as u32 == hovered_logical);
+        if hit {
+            let y = app.hover_y;
+            let x_start = inner.x;
+            let x_end = inner.x.saturating_add(inner.width).saturating_sub(1);
+            let bg = theme::color::BG_CARD_HOVER;
+            let buf = f.buffer_mut();
+            for x in x_start..=x_end {
+                if let Some(cell) = buf.cell_mut(Position::new(x, y)) {
+                    let s = cell.style().bg(bg);
+                    cell.set_style(s);
+                }
+            }
+        }
+    }
 
     // Paint the selection overlay on top of the chat. Cells inside the
     // (sel_start, sel_end) rectangle, clamped to the chat inner area, get the
@@ -413,21 +659,21 @@ pub(super) fn render_input(f: &mut Frame, area: Rect, app: &mut App) {
     // is scannable from across the screen.
     let (title, border_color) = if app.generating {
         (
-            "❯ generating, Ctrl+C to cancel".to_string(),
+            "▎ generating · Ctrl+C to cancel".to_string(),
             theme::color::WARNING,
         )
     } else if is_cmd {
         (
-            "❯ command — Enter to run".to_string(),
+            "▎ command · Enter to run".to_string(),
             theme::color::ACCENT_ALT,
         )
     } else if app.yn_pending {
         (
-            "❯ [Y] yes  •  [N] no  •  type to override".to_string(),
+            "▎ [Y] yes  ·  [N] no  ·  type to override".to_string(),
             theme::color::ASSISTANT,
         )
     } else {
-        ("❯ message".to_string(), theme::color::ACCENT)
+        ("▎ message".to_string(), theme::color::ACCENT)
     };
 
     let block = ratatui::widgets::Block::default()
