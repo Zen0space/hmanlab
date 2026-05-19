@@ -23,6 +23,7 @@ mod disconnect;
 mod inline;
 mod picker;
 mod sessions;
+mod shell_monitor;
 mod telegram_setup;
 
 pub(super) use add_model::render_add_model;
@@ -32,6 +33,7 @@ pub(super) use disconnect::render_disconnect_picker;
 pub(super) use inline::render_inline_popup;
 pub(super) use picker::render_picker;
 pub(super) use sessions::render_session_picker;
+pub(super) use shell_monitor::render_shell_monitor;
 pub(super) use telegram_setup::render_telegram_setup;
 
 /// Centre a (`percent_x` % wide, `percent_y` % tall) rectangle inside `r`.

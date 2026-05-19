@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-20
+
+### What's new
+- **Live shell monitor.** When the agent runs a `run_command`, the status bar shows a pulsing `● 1 shell running` indicator. Click it to open a monitor overlay that streams stdout and stderr in real time, with a blinking cursor at the tail. `Esc` hides the monitor and the shell keeps running; `Ctrl+C` inside the monitor kills the child cleanly and the badge flips to `✗ killed`. Hard timeout lifted from 30 s to 10 min so real workflows (test suites, builds) finish without the agent giving up — and you can always interrupt earlier.
+- **Typing-cursor on streaming replies.** A `▌` caret blinks at the end of the assistant's in-flight message while it streams. Disappears the instant the turn ends and stays out of copy-on-drag selections.
+
+### Changed
+- **Memory tool rows are now one line.** `save_memory` / `read_memory` / `forget_memory` render as `memory · save <slug>` in the chat tile instead of dumping the full JSON arg blob (which could inline several KB of memory body into the header). The redundant `✓ Allowed: …` system line is also suppressed for memory operations — the tile itself already tells you what happened.
+
+[0.2.1]: https://github.com/hmanlab/hmanlab/compare/0.2.0...0.2.1
+
 ## [0.2.0] - 2026-05-19
 
 ### What's new

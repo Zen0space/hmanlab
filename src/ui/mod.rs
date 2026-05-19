@@ -104,6 +104,9 @@ pub fn render(f: &mut Frame, app: &mut App) {
     if app.mode == Mode::AgentsSetup {
         popups::render_agents_setup(f, area, app);
     }
+    if app.mode == Mode::ShellMonitor {
+        popups::render_shell_monitor(f, area, app);
+    }
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
@@ -173,18 +176,69 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn render_status(f: &mut Frame, area: Rect, app: &App) {
+fn render_status(f: &mut Frame, area: Rect, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("▎ ", Style::default().fg(theme::color::ACCENT_ALT)),
-            Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
-        ])),
-        chunks[0],
-    );
+
+    // Left side: the regular status text, with the shell-monitor
+    // indicator appended when a `run_command` is in flight. The
+    // indicator is mouse-clickable — record its column range into
+    // `app.render` so the mouse handler can route the click.
+    let mut left_spans = vec![
+        Span::styled("▎ ", Style::default().fg(theme::color::ACCENT_ALT)),
+        Span::styled(app.status.as_str(), Style::default().fg(theme::color::FG)),
+    ];
+    // Default to "no indicator this frame" so a stale rect from a prior
+    // frame can't keep catching clicks after the shell exits.
+    app.render.shell_indicator_x = 0;
+    app.render.shell_indicator_y = 0;
+    app.render.shell_indicator_w = 0;
+    if let Some(rt) = app.active_shell.as_ref() {
+        if rt.running {
+            let dot = "●";
+            // Pulse the dot via the same anim_tick the chat renderer
+            // uses for in-flight tools — visually links "tool running"
+            // (chat-side breath) and "shell running" (footer-side
+            // breath) as the same kind of "something is happening".
+            // Sine-interp between a dim and a saturated peach (the
+            // same palette as `tool_breath` in chat/helpers.rs).
+            let dot_color = {
+                let period = 30u64;
+                let phase = (app.anim_tick % period) as f32 / period as f32 * std::f32::consts::TAU;
+                let t = (phase.sin() * 0.5) + 0.5;
+                let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+                Color::Rgb(lerp(115, 250), lerp(80, 179), lerp(60, 135))
+            };
+            let label = "  1 shell running ";
+            left_spans.push(Span::styled("   ", Style::default()));
+            left_spans.push(Span::styled(
+                dot.to_string(),
+                Style::default().fg(dot_color),
+            ));
+            left_spans.push(Span::styled(
+                label.to_string(),
+                Style::default()
+                    .fg(theme::color::FG)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            // Position the indicator hit-test. Span widths in cells:
+            //   "▎ " = 2, status text = app.status width,
+            //   "   " (gap) = 3, "●" = 1, label width follows.
+            // The whole `● 1 shell running ` block is clickable —
+            // record its left edge + total width so the mouse handler
+            // can detect taps anywhere in that range.
+            let prefix_w = 2 + app.status.chars().count() as u16 + 3;
+            let indicator_w = 1 + label.chars().count() as u16;
+            // chunks[0] is the left half of the status bar. The
+            // indicator sits inside it at column offset `prefix_w`.
+            app.render.shell_indicator_x = chunks[0].x.saturating_add(prefix_w);
+            app.render.shell_indicator_y = chunks[0].y;
+            app.render.shell_indicator_w = indicator_w;
+        }
+    }
+    f.render_widget(Paragraph::new(Line::from(left_spans)), chunks[0]);
     let help = Line::from(vec![
         Span::styled("/help", Style::default().fg(theme::color::FG)),
         Span::styled("  ·  ", Style::default().fg(theme::color::FG_DIMMER)),
