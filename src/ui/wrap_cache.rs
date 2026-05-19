@@ -50,7 +50,7 @@ fn hash_str_style(text: &str, style: Style) -> u64 {
 }
 
 fn clone_lines(src: &[Vec<Span<'static>>]) -> Vec<Vec<Span<'static>>> {
-    src.iter().cloned().collect()
+    src.to_vec()
 }
 
 /// Memoised `parse_inline_md` + `wrap_styled_segments`.
