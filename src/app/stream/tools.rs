@@ -143,7 +143,7 @@ fn format_confirm_for_telegram(req: &tools::ConfirmRequest) -> String {
         req.prompt
     );
     if !req.diff.is_empty() {
-        s.push_str("\n");
+        s.push('\n');
         const MAX_LINES: usize = 50;
         let shown: Vec<&tools::DiffLine> = req.diff.iter().take(MAX_LINES).collect();
         for line in &shown {

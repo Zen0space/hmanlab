@@ -588,7 +588,7 @@ impl App {
     /// (otherwise the local push_info would be the only signal). Once
     /// the specialist's loop starts, the existing `pending_telegram_reply_chat`
     /// + `on_done` bridge auto-forwards the consolidated reply back to
-    /// this chat — same path a normal Telegram→model turn uses.
+    ///   this chat — same path a normal Telegram→model turn uses.
     fn telegram_cmd_ask(
         &mut self,
         chat_id: i64,
@@ -1177,6 +1177,27 @@ fn parse_yes_no(text: &str) -> Option<bool> {
     }
 }
 
+/// Cheat-sheet DM'd back when the Telegram user sends `/help` (or `/`
+/// with no body). Lists ONLY the commands actually wired in
+/// `handle_telegram_command` — anything missing from here would fall
+/// through to the "not available via Telegram" branch.
+fn telegram_help_text() -> String {
+    "hmanlab via Telegram — commands:\n\
+     \x20 /help              this list\n\
+     \x20 /sessions          recent saved sessions\n\
+     \x20 /new               start a fresh session\n\
+     \x20 /models            list available models\n\
+     \x20 /model <name>      switch Ollama model (BYOK switch is local-only)\n\
+     \x20 /settings          account + version snapshot\n\
+     \x20 /agents            specialist roster + session state\n\
+     \x20 /agents on|off     flip specialist session activation\n\
+     \x20 /ask <name> <q>    manually invoke a specialist (run /agents on first)\n\
+     \n\
+     Any non-slash message is sent to the active model as a normal turn; \
+     the assistant's reply lands back here when it finishes."
+        .into()
+}
+
 #[cfg(test)]
 mod yes_no_tests {
     use super::parse_yes_no;
@@ -1223,25 +1244,4 @@ mod yes_no_tests {
         assert_eq!(parse_yes_no("yes please"), Some(true));
         assert_eq!(parse_yes_no("no thanks"), Some(false));
     }
-}
-
-/// Cheat-sheet DM'd back when the Telegram user sends `/help` (or `/`
-/// with no body). Lists ONLY the commands actually wired in
-/// `handle_telegram_command` — anything missing from here would fall
-/// through to the "not available via Telegram" branch.
-fn telegram_help_text() -> String {
-    "hmanlab via Telegram — commands:\n\
-     \x20 /help              this list\n\
-     \x20 /sessions          recent saved sessions\n\
-     \x20 /new               start a fresh session\n\
-     \x20 /models            list available models\n\
-     \x20 /model <name>      switch Ollama model (BYOK switch is local-only)\n\
-     \x20 /settings          account + version snapshot\n\
-     \x20 /agents            specialist roster + session state\n\
-     \x20 /agents on|off     flip specialist session activation\n\
-     \x20 /ask <name> <q>    manually invoke a specialist (run /agents on first)\n\
-     \n\
-     Any non-slash message is sent to the active model as a normal turn; \
-     the assistant's reply lands back here when it finishes."
-        .into()
 }

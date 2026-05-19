@@ -289,7 +289,7 @@ impl App {
             return;
         }
         // Seed the draft from the existing spec when editing.
-        self.agents_setup_draft = match editing
+        self.agents_setup_draft = editing
             .as_deref()
             .and_then(|n| self.agents.by_name_mut(n))
             .map(|s| AgentsDraft {
@@ -298,10 +298,8 @@ impl App {
                 model_provider: s.provider.clone(),
                 task: s.task.clone(),
                 system_prompt: s.system_prompt.clone(),
-            }) {
-            Some(d) => d,
-            None => AgentsDraft::default(),
-        };
+            })
+            .unwrap_or_default();
         let is_add = editing.is_none();
         self.agents_setup_editing = editing;
         self.agents_setup_picker_index = 0;
@@ -693,28 +691,6 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[n]
 }
 
-#[cfg(test)]
-mod suggest_tests {
-    use super::*;
-
-    #[test]
-    fn suggests_close_match() {
-        assert_eq!(suggest_agents_sub("lst"), Some("list"));
-        assert_eq!(suggest_agents_sub("addd"), Some("add"));
-        assert_eq!(suggest_agents_sub("remov"), Some("remove"));
-    }
-
-    #[test]
-    fn returns_none_for_garbage() {
-        assert_eq!(suggest_agents_sub("zzzzzzzz"), None);
-    }
-
-    #[test]
-    fn exact_match_returns_self() {
-        assert_eq!(suggest_agents_sub("list"), Some("list"));
-    }
-}
-
 fn validate_name(
     name: &str,
     existing: &crate::config::AgentsConfig,
@@ -754,4 +730,26 @@ fn format_roster(specialists: &[SpecialistAgent]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+#[cfg(test)]
+mod suggest_tests {
+    use super::*;
+
+    #[test]
+    fn suggests_close_match() {
+        assert_eq!(suggest_agents_sub("lst"), Some("list"));
+        assert_eq!(suggest_agents_sub("addd"), Some("add"));
+        assert_eq!(suggest_agents_sub("remov"), Some("remove"));
+    }
+
+    #[test]
+    fn returns_none_for_garbage() {
+        assert_eq!(suggest_agents_sub("zzzzzzzz"), None);
+    }
+
+    #[test]
+    fn exact_match_returns_self() {
+        assert_eq!(suggest_agents_sub("list"), Some("list"));
+    }
 }
