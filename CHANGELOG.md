@@ -5,6 +5,26 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-19
+
+### Changed
+- **Streaming feels smoother.** Token-by-token replies coalesce multiple chunks into one redraw, and inline markdown is cached so long transcripts don't re-parse every paragraph on every frame. Long replies stay responsive even when the model is firing tokens fast.
+- **Sidebar stays responsive on big repos.** The workspace tree is walked only when something actually changes (you toggle a directory or switch workspaces), not on every frame. Clicking around a large monorepo no longer stalls the chat stream.
+- **Opening large files no longer freezes the UI.** Clicking a file in the sidebar shows `loading…` immediately while the read happens on a background thread. The viewer fills in when the read completes.
+- **Config writes don't block the UI.** Adding a BYOK key, editing a specialist, or trusting a workspace now persists to disk on a background worker — no more pauses when finishing a wizard.
+- **`Ctrl+C` during a multi-agent consult stops the specialist too.** Previously a runaway specialist could keep iterating (and billing your BYOK provider) after you cancelled the main agent. Now one `Ctrl+C` stops everything in flight.
+- **Slash command aliases work everywhere.** `/m` for `/model`, `/n` for `/new`, `/ls` for `/models`, `/tg` for `/telegram` and the rest now work the same way from Telegram DMs as they do in the local terminal.
+
+### Added
+- **"Did you mean?" suggestions for typo'd subcommands.** Type `/agents lst` and hmanlab now suggests `/agents list` instead of silently falling through to the help screen.
+
+### Fixed
+- **Long replies no longer cut off mid-paragraph.** Scroll math now uses visual rows (after word-wrap) instead of logical lines, so the bottom of a long streaming reply is always reachable with `End` or follow-mode.
+- **`/help` always matches what works.** The commands cheatsheet now generates from the same table the parser uses, so help text can't drift from what's actually accepted. Aliases and argument shapes appear automatically next to each command.
+- **Tool-result correlation can't silently break.** Tool result messages are built via a dedicated constructor that requires the `tool_call_id` matching the originating assistant turn — strict providers like MiniMax 400 without it, and there's no longer a struct literal to forget the field in.
+
+[0.2.0]: https://github.com/hmanlab/hmanlab/compare/0.1.11...0.2.0
+
 ## [0.1.11] - 2026-05-19
 
 ### Added
