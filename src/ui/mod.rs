@@ -136,10 +136,7 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     // back to any other provider shows that provider's real host as
     // usual. Centralised here because this is the only place the host
     // is user-facing.
-    let host_short = if app
-        .selected_extra
-        .as_ref()
-        .map(|e| e.provider.as_str())
+    let host_short = if app.selected_extra.as_ref().map(|e| e.provider.as_str())
         == Some(crate::config::HMANLAB_HOSTED_PROVIDER)
     {
         "api.hmanlab".to_string()
